@@ -1,6 +1,6 @@
 'use strict';
-// v0.4.3: USB HID barcode fallback + optional paired local WIA flatbed scanner, manual Drive link workflow.
-const C=window.CNMI_CONFIG||{},S={token:null,refresh:null,expire:0,email:'',role:'',view:'home',equipment:[],forms:[],rules:[],docs:[],cases:[],cal:[],years:[],plans:[],filter:'',month:new Date().toISOString().slice(0,7),selected:new Set(),uploadFile:null,scanInfo:null,pendingRows:[],importName:'',scanConflict:false,embeddedScan:null,localPages:[],localDevices:[]};
+// v0.4.4: verified-email self signup for Mahidol/RFS with admin approval; retains v0.4.3 scanning workflows.
+const C=window.CNMI_CONFIG||{},S={token:null,refresh:null,expire:0,email:'',role:'',view:'home',equipment:[],forms:[],rules:[],docs:[],cases:[],cal:[],years:[],plans:[],filter:'',month:new Date().toISOString().slice(0,7),selected:new Set(),uploadFile:null,scanInfo:null,pendingRows:[],importName:'',scanConflict:false,embeddedScan:null,localPages:[],localDevices:[],members:[]};
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icons={home:'<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>',registry:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',monthly:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M7 2v4M17 2v4M3 9h18M8 14h3"/>',scan:'<path d="M4 9V4h5M15 4h5v5M4 15v5h5M15 20h5v-5M4 12h16"/>',qr:'<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM21 14v7h-6"/>',cal:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',plans:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/>',case:'<path d="M4 4h16v16H4zM8 9h8M8 13h8M8 17h5"/>',admin:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/>'};
 const ico=k=>`<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">${icons[k]||icons.home}</svg>`;
@@ -12,11 +12,108 @@ function resetSession(){sessionStorage.removeItem('CNMI_AUTH_V040');S.token=null
 async function authToken(){if(!S.token)throw Error('กรุณาเข้าสู่ระบบ');if(S.expire>Date.now()/1000+90)return S.token;if(!S.refresh)throw Error('เซสชันหมดอายุ');const r=await fetch(`${C.supabaseUrl}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{'apikey':C.publishableKey,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:S.refresh})});const j=await r.json();if(!r.ok)throw Error('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');saveSession(j);return S.token;}
 async function api(method,path,data,opts={}){const token=await authToken();const headers={'apikey':C.publishableKey,'Authorization':`Bearer ${token}`,'Content-Type':'application/json',...(method==='POST'?{'Prefer':'return=representation'}:{}),...opts.headers};const r=await fetch(`${C.supabaseUrl}/rest/v1/${path}`,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});const txt=await r.text();if(!r.ok)throw Error(`Supabase ${r.status}: ${txt.slice(0,190)}`);return txt?JSON.parse(txt):[];}
 async function get(path){return api('GET',path);}
-async function submitLogin(e){e.preventDefault();const f=e.target;const email=String(f.elements.email.value||'').trim().toLowerCase();const pass=String(f.elements.password.value||'');if(!email.includes('@')||!pass)return toast('กรุณากรอกอีเมลและรหัสผ่าน',true);try{const r=await fetch(`${C.supabaseUrl}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:C.publishableKey,'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});const x=await r.json();if(!r.ok)throw Error(x.msg||x.error_description||x.message||'อีเมลหรือรหัสผ่านไม่ถูกต้อง');saveSession(x);await startApp();}catch(err){toast(err.message,true);}}
+function parseUsernameInput(raw,selectedDomain){
+  let local=String(raw||'').trim().toLowerCase();
+  let domain=String(selectedDomain||'').trim().toLowerCase();
+  if(!['mahidol.ac.th','rfs.co.th'].includes(domain))throw Error('เลือกมหิดล หรือ RFS ก่อน');
+  // Support copy/paste of an entire address without appending the suffix twice.
+  if(local.includes('@')){
+    const bits=local.split('@');
+    if(bits.length!==2||!['mahidol.ac.th','rfs.co.th'].includes(bits[1]))throw Error('รองรับเฉพาะอีเมล @mahidol.ac.th หรือ @rfs.co.th');
+    domain=bits[1];local=bits[0];
+  }
+  if(!/^[a-z0-9._%+\-]{1,64}$/.test(local)||local.startsWith('.')||local.endsWith('.')||local.includes('..'))throw Error('กรอกชื่ออีเมลก่อน @ ให้ถูกต้อง');
+  return {local,domain,email:`${local}@${domain}`};
+}
+function emailChoice(form){
+  return parseUsernameInput(form.elements.local.value,form.elements.domain.value).email;
+}
+function attachEmailPreview(form){
+ const local=form.elements.local,domain=form.elements.domain,preview=form.querySelector('[data-email-preview]');
+ function update(){
+  try{
+   const raw=local.value.trim();
+   if(!raw){preview.textContent='ตัวอย่าง: '+(domain.value==='rfs.co.th'?'username.s@rfs.co.th':'username.sur@mahidol.ac.th');return;}
+   const parsed=parseUsernameInput(raw,domain.value);
+   if(raw.includes('@')){local.value=parsed.local;domain.value=parsed.domain;}
+   preview.textContent='อีเมลที่จะใช้: '+parsed.email;
+  }catch(error){preview.textContent=error.message;}
+ }
+ local.addEventListener('input',update);domain.addEventListener('change',update);update();
+}
+function authHeaders(){return {'apikey':C.publishableKey,'Content-Type':'application/json'};}
+async function submitLogin(e){
+  e.preventDefault();const f=e.target;let email;
+  try{email=emailChoice(f);}catch(err){return toast(err.message,true);}
+  const pass=String(f.elements.password.value||'');if(!pass)return toast('กรุณากรอกรหัสผ่าน',true);
+  const btn=f.querySelector('[type=submit]');btn.disabled=true;
+  try{
+    const r=await fetch(`${C.supabaseUrl}/auth/v1/token?grant_type=password`,{method:'POST',headers:authHeaders(),body:JSON.stringify({email,password:pass})});
+    const x=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error('เข้าสู่ระบบไม่สำเร็จ กรุณาตรวจอีเมล/รหัสผ่าน หรือเลือกสมัครใช้งาน');
+    saveSession(x);await startApp();
+  }catch(err){toast(err.message,true);}finally{btn.disabled=false;}
+}
+async function submitSignup(e){
+  e.preventDefault();if(!validConfig())return;
+  const f=e.target;let email;try{email=emailChoice(f);}catch(err){return toast(err.message,true);}
+  const password=String(f.elements.password.value||'');
+  if(password.length<6)return toast('รหัสผ่านต้องยาวอย่างน้อย 6 ตัว',true);
+  if(password!==String(f.elements.confirm.value||''))return toast('ยืนยันรหัสผ่านไม่ตรงกัน',true);
+  const btn=f.querySelector('[type=submit]');btn.disabled=true;
+  try{
+    const r=await fetch(`${C.supabaseUrl}/auth/v1/signup?redirect_to=${encodeURIComponent('https://equipment.cnmiblood.com/')}`,{
+      method:'POST',headers:authHeaders(),body:JSON.stringify({email,password})
+    });
+    const x=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error(x.msg||x.error_description||x.message||'สมัครไม่ได้ กรุณาตรวจการตั้งค่า Email Provider');
+    signupDoneScreen(email);
+  }catch(err){toast(err.message,true);}finally{btn.disabled=false;f.elements.password.value='';f.elements.confirm.value='';}
+}
+function loginFields(mode){const reg=mode==='signup';return `<form id="${reg?'signupForm':'loginForm'}" class="stack">
+<div class="field"><label>เลือกหน่วยงานและชื่อผู้ใช้</label><div class="email-pair"><select name="domain" aria-label="เลือกหน่วยงาน"><option value="mahidol.ac.th">มหิดล · @mahidol.ac.th</option><option value="rfs.co.th">BEM (RFS) · @rfs.co.th</option></select><input name="local" autocomplete="username" inputmode="email" required placeholder="username.sur หรือ username.s" aria-label="ชื่ออีเมล ไม่ต้องพิมพ์ @"></div><small class="email-preview" data-email-preview aria-live="polite">ตัวอย่าง: username.sur@mahidol.ac.th</small></div>
+<div class="field"><label>${reg?'ตั้งรหัสผ่าน (อย่างน้อย 6 ตัว)':'รหัสผ่าน'}</label><input name="password" type="password" minlength="${reg?6:1}" autocomplete="${reg?'new-password':'current-password'}" required placeholder="กรอกรหัสผ่าน"></div>
+${reg?'<div class="field"><label>ยืนยันรหัสผ่าน</label><input name="confirm" type="password" minlength="6" autocomplete="new-password" required placeholder="กรอกรหัสผ่านอีกครั้ง"></div>':''}
+<button class="btn primary" type="submit" ${validConfig()?'':'disabled'}>${reg?'สมัครและรับอีเมลยืนยัน':'เข้าสู่ระบบ'}</button></form>`;}
+function loginScreen(mode='login'){
+  const reg=mode==='signup', configOk=validConfig();
+  $('#app').innerHTML=`<main class="login"><section class="panel"><h1>CNMI Equipment Care</h1><p class="muted">ทะเบียนเครื่องมือ · เอกสารรายเดือน · BEM</p>
+  ${!configOk?'<p class="message error">กรุณาตั้งค่า Supabase URL และ Publishable Key ใน config.js ก่อน</p>':''}
+  <div class="auth-tabs"><button class="btn ${reg?'':'primary'}" type="button" id="gotoLogin">เข้าสู่ระบบ</button><button class="btn ${reg?'primary':''}" type="button" id="gotoSignup">สมัครใช้งาน</button></div>
+  ${loginFields(mode)}
+  <p class="note">${reg?'ยืนยันอีเมลก่อน จากนั้นเข้าสู่ระบบเพื่อส่งคำขออนุมัติ · ยังเปิดทะเบียนไม่ได้จนกว่า Admin จะอนุมัติ':'ยังไม่มีบัญชี? กด “สมัครใช้งาน” · หากเข้าสู่ระบบไม่ได้ โปรดตรวจรหัสผ่านก่อนสมัครใหม่'}</p>
+  ${!reg?`<div class="actions" style="margin-top:10px"><button class="btn" id="googleLogin" ${configOk?'':'disabled'}>Google (บัญชีเดิม)</button></div>`:''}
+  </section></main>`;
+  $('#gotoLogin').onclick=()=>loginScreen('login');$('#gotoSignup').onclick=()=>loginScreen('signup');
+  if(reg){attachEmailPreview($('#signupForm'));$('#signupForm').onsubmit=submitSignup;}else{attachEmailPreview($('#loginForm'));$('#loginForm').onsubmit=submitLogin;$('#googleLogin').onclick=googleLogin;}
+}
+function signupDoneScreen(email){$('#app').innerHTML=`<main class="login"><section class="panel"><h1>ตรวจอีเมลเพื่อยืนยันบัญชี</h1><p>ส่งคำขอสมัครสำหรับ <b>${esc(email)}</b> แล้ว หากระบบอนุญาตการสมัคร จะมีอีเมลยืนยันส่งไปให้</p><p class="note">กดลิงก์ยืนยันในอีเมล จากนั้นกลับมาเข้าสู่ระบบเพื่อบันทึกคำขอรอ Admin อนุมัติ (การส่งอีเมลขึ้นกับ Supabase Email Provider)</p><button id="afterSignupLogin" class="btn primary">กลับหน้าเข้าสู่ระบบ</button></section></main>`;$('#afterSignupLogin').onclick=()=>loginScreen();}
+function pendingScreen(email,status){const rejected=status==='rejected',disabled=status==='approved';$('#app').innerHTML=`<main class="login"><section class="panel"><h1>${rejected?'คำขอไม่ได้รับอนุมัติ':disabled?'บัญชีถูกพักใช้งาน':'รอ Admin อนุมัติ'}</h1><p class="muted">${esc(email)}</p><p>${rejected||disabled?'บัญชีนี้ยังไม่สามารถใช้งานได้ กรุณาติดต่อ Admin เพื่อขอตรวจสอบสิทธิ์':'ยืนยันอีเมลแล้วและส่งคำขอเข้าสู่ระบบเรียบร้อย ยังไม่อนุญาตให้ดูทะเบียนหรือ PDF จนกว่า Admin จะอนุมัติ'}</p><div class="actions"><button class="btn primary" id="checkApproval">ตรวจสถานะอีกครั้ง</button><button class="btn" id="pendingLogout">ออกจากระบบ</button></div></section></main>`;$('#checkApproval').onclick=()=>startApp();$('#pendingLogout').onclick=()=>{resetSession();loginScreen();};}
 function googleLogin(){location.href=`${C.supabaseUrl}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(location.href.split('#')[0])}`;}
-function loginScreen(){let configOk=validConfig();$('#app').innerHTML=`<main class="login"><section class="panel"><h1>CNMI Equipment Care</h1><p class="muted">ทะเบียนเครื่องมือ · เอกสารรายเดือน · BEM</p>${!configOk?'<p class="message error">กรุณาตั้งค่า Supabase URL และ Publishable Key ใน config.js ก่อน</p>':''}<form id="loginForm" class="stack"><div class="field"><label>อีเมลที่ Admin อนุญาต</label><input name="email" type="email" autocomplete="username" required placeholder="อีเมลมหิดล / บัญชี BEM"></div><div class="field"><label>รหัสผ่านที่ Admin กำหนดให้</label><input name="password" type="password" autocomplete="current-password" required placeholder="กรอกรหัสผ่าน"></div><button class="btn primary" type="submit" ${configOk?'':'disabled'}>เข้าสู่ระบบ</button></form><div class="actions" style="margin-top:10px"><button class="btn" id="googleLogin" ${configOk?'':'disabled'}>Google (บัญชีเดิม)</button></div><p class="note">ผู้ใช้ใหม่รับรหัสเริ่มต้นจาก Admin และต้องเปลี่ยนเมื่อเข้าครั้งแรก · บัญชีเดิมที่ใช้ Google ยังเข้าสู่ระบบได้ระหว่างย้ายระบบ · ลืมรหัสผ่าน โปรดติดต่อ Admin</p></section></main>`;$('#loginForm').addEventListener('submit',submitLogin);$('#googleLogin').addEventListener('click',googleLogin);}
-async function loadData(){const [equip,forms,rules,docs,cases,cal,imports,plans]=await Promise.all([get('eq_equipment?select=*&order=asset_new.asc&limit=1000'),get('eq_forms?select=*&order=code.asc&limit=1000'),get('eq_monthly_rules?select=*&limit=1000'),get('eq_documents?select=*&order=uploaded_at.desc&limit=1000'),get('eq_cases?select=*&order=created_at.desc&limit=1000'),get('eq_cal_specs?select=*&order=created_at.desc&limit=1000'),get('eq_year_imports?select=*&order=imported_at.desc&limit=1000'),get('eq_year_plan_rows?select=*&limit=1000')]);Object.assign(S,{equipment:equip,forms,rules,docs,cases,cal,years:imports,plans});window.EQUIPMENT_REGISTRY=equip;window.FORM_CATALOG=forms;}
-async function startApp(){try{if(!validConfig())return loginScreen();const t=await authToken();const u=await fetch(`${C.supabaseUrl}/auth/v1/user`,{headers:{apikey:C.publishableKey,Authorization:`Bearer ${t}`}});if(!u.ok)throw Error('เข้าสู่ระบบไม่สำเร็จ');const user=await u.json();S.email=String(user.email||'').toLowerCase();const member=await get(`eq_members?email=eq.${encodeURIComponent(S.email)}&active=eq.true&select=role,must_change_password`);if(!member.length)throw Error('บัญชีนี้ยังไม่ได้รับสิทธิ์จาก Admin');S.role=member[0].role;if(member[0].must_change_password){changePasswordScreen();return;}await loadData();renderShell();}catch(e){resetSession();loginScreen();toast(e.message,true);}}
+async function loadData(){const [equip,forms,rules,docs,cases,cal,imports,plans]=await Promise.all([get('eq_equipment?select=*&order=asset_new.asc&limit=1000'),get('eq_forms?select=*&order=code.asc&limit=1000'),get('eq_monthly_rules?select=*&limit=1000'),get('eq_documents?select=*&order=uploaded_at.desc&limit=1000'),get('eq_cases?select=*&order=created_at.desc&limit=1000'),get('eq_cal_specs?select=*&order=created_at.desc&limit=1000'),get('eq_year_imports?select=*&order=imported_at.desc&limit=1000'),get('eq_year_plan_rows?select=*&limit=1000')]);Object.assign(S,{equipment:equip,forms,rules,docs,cases,cal,years:imports,plans});S.members=S.role==='admin'?await get('eq_members?select=email,role,active,approval_status,requested_at,approved_at&order=requested_at.desc&limit=1000'):[];window.EQUIPMENT_REGISTRY=equip;window.FORM_CATALOG=forms;}
+async function startApp(){
+ try{
+  if(!validConfig())return loginScreen();
+  const t=await authToken();
+  const u=await fetch(`${C.supabaseUrl}/auth/v1/user`,{headers:{apikey:C.publishableKey,Authorization:`Bearer ${t}`}});
+  if(!u.ok)throw Error('เข้าสู่ระบบไม่สำเร็จ');
+  const user=await u.json();S.email=String(user.email||'').toLowerCase();
+  if(!user.email_confirmed_at)throw Error('กรุณายืนยันอีเมลก่อนสมัครใช้งาน');
+  let rows=await get(`eq_members?email=eq.${encodeURIComponent(S.email)}&select=role,active,must_change_password,approval_status`);
+  if(!rows.length){
+    const result=await api('POST','rpc/eq_request_access',{});
+    if(result!=='pending'&&result!=='approved'&&result!=='rejected')throw Error('ไม่สามารถส่งคำขอได้');
+    rows=await get(`eq_members?email=eq.${encodeURIComponent(S.email)}&select=role,active,must_change_password,approval_status`);
+  }
+  if(!rows.length)throw Error('ไม่พบคำขอใช้งาน กรุณาติดต่อ Admin');
+  const member=rows[0];
+  if(!member.active){pendingScreen(S.email,member.approval_status);return;}
+  S.role=member.role;
+  if(member.must_change_password){changePasswordScreen();return;}
+  await api('POST','rpc/eq_touch_login',{}).catch(()=>{});
+  await loadData();renderShell();
+ }catch(e){resetSession();loginScreen();toast(e.message,true);}
+}
 function changePasswordScreen(first=true){$('#app').innerHTML=`<main class="login"><section class="panel"><h1>${first?'เปลี่ยนรหัสผ่านครั้งแรก':'เปลี่ยนรหัสผ่าน'}</h1><p class="muted">${esc(S.email)}</p><p class="message">${first?'Admin กำหนดรหัสเริ่มต้นให้แล้ว กรุณาตั้งรหัสใหม่ก่อนใช้งานข้อมูลเครื่องมือ':'กรุณากำหนดรหัสผ่านใหม่ แล้วเข้าสู่ระบบอีกครั้ง'}</p><form id="changeFirstPassForm" class="stack"><div class="field"><label>รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)</label><input name="newpass" type="password" minlength="6" autocomplete="new-password" required placeholder="ตัวเลขล้วน / ตัวอักษร / ผสมกันได้"></div><div class="field"><label>ยืนยันรหัสผ่านใหม่</label><input name="confirm" type="password" minlength="6" autocomplete="new-password" required placeholder="กรอกให้ตรงกัน"></div><button class="btn primary" type="submit">เปลี่ยนรหัสผ่าน</button></form><div class="actions"><button class="btn" id="cancelFirstPass">ออกจากระบบ</button></div><p class="note">รหัสใหม่จะเก็บโดย Supabase Auth ไม่บันทึกไว้ใน Equipment Care หรือ GitHub</p></section></main>`;$('#changeFirstPassForm').onsubmit=submitFirstPasswordChange;$('#cancelFirstPass').onclick=()=>{resetSession();loginScreen();};}
 async function submitFirstPasswordChange(e){e.preventDefault();const f=e.target,p=String(f.elements.newpass.value||''),c=String(f.elements.confirm.value||'');if(p.length<6)return toast('รหัสผ่านต้องมีอย่างน้อย 6 ตัว',true);if(p!==c)return toast('รหัสผ่านทั้งสองช่องไม่ตรงกัน',true);const b=f.querySelector('[type=submit]');b.disabled=true;try{const t=await authToken();const r=await fetch(`${C.supabaseUrl}/auth/v1/user`,{method:'PUT',headers:{apikey:C.publishableKey,Authorization:`Bearer ${t}`,'Content-Type':'application/json'},body:JSON.stringify({password:p})});const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.msg||j.error_description||j.message||'ไม่สามารถเปลี่ยนรหัสผ่านได้');resetSession();loginScreen();toast('เปลี่ยนรหัสผ่านเรียบร้อย กรุณาเข้าสู่ระบบด้วยรหัสใหม่');}catch(err){toast(err.message,true);b.disabled=false;}finally{f.elements.newpass.value='';f.elements.confirm.value='';}}
 function navItems(){return [['home','ภาพรวม'],['registry','ทะเบียน'],['monthly','เอกสารรายเดือน'],['scan','สแกน PDF'],['qr','พิมพ์ QR'],['cal','จุด CAL'],['plans','แผน Y'],['case','งาน BEM'],...(S.role==='admin'?[['admin','สิทธิ์ผู้ใช้']]:[])];}
@@ -125,9 +222,24 @@ function mount_plans(){const f=$('#yForm');f.onsubmit=async e=>{e.preventDefault
 async function saveY(){const ok=S.pendingRows.filter(r=>r.equipment_id);if(!ok.length)return;const btn=$('#saveY');btn.disabled=true;try{const imports=await api('POST','eq_year_imports',{plan_year:S.importYear,plan_kind:S.importKind,file_name:S.importName,imported_by:S.email,row_count:ok.length});const iid=imports[0]?.id;if(!iid)throw Error('สร้างประวัติ Import ไม่สำเร็จ');const rows=ok.map(r=>({import_id:iid,equipment_id:r.equipment_id,plan_month:r.plan_month}));await api('POST','eq_year_plan_rows',rows);S.pendingRows=[];await loadData();draw();toast('นำเข้าแผน Y สำเร็จ '+rows.length+' รายการ');}catch(e){btn.disabled=false;toast(e.message,true);}}
 function caseView(){return title('เหตุเครื่องมือผิดปกติ / BEM','หนึ่งเครื่องมือมีเคสเปิดอยู่ได้เพียงหนึ่งเคส')+`<section class="panel"><form id="caseForm"><div class="field"><label>เครื่องมือ</label>${eqSelect()}</div><div class="field"><label>อาการ / เหตุผิดปกติ</label><textarea name="description" rows="2" required placeholder="ระบุอาการที่พบ"></textarea></div>${['admin','staff','bem'].includes(S.role)?'<button class="btn primary">เปิดเหตุใหม่</button>':''}</form></section><section class="panel"><h3>รายการติดตาม</h3><div class="list">${S.cases.slice(0,100).map(c=>`<div class="list-item"><div><b>${esc(fmtEq(c.equipment_id))}</b><small>${esc(c.description)}</small><small>${esc(c.bem_actor_first||'')} · ${esc(c.bem_note||'')}</small></div><div><span class="status ${c.closed_at?'closed':'open'}">${esc(c.status)}</span>${!c.closed_at&&['admin','bem'].includes(S.role)?`<button class="btn small" data-case="${c.id}" style="display:block;margin-top:8px">อัปเดต</button>`:''}</div></div>`).join('')||'<div class="empty">ยังไม่มีเคส</div>'}</div></section><div id="caseUpdate" class="panel hide"></div>`;}
 function mount_case(){const f=$('#caseForm');f.onsubmit=async e=>{e.preventDefault();const d=new FormData(f),equipment_id=d.get('equipment'),description=String(d.get('description')||'').trim();if(S.cases.some(c=>c.equipment_id===equipment_id&&!c.closed_at))return toast('เครื่องนี้มีเคสเปิดอยู่แล้ว โปรดอัปเดตเคสเดิม',true);try{await api('POST','eq_cases',{equipment_id,description,opened_by_email:S.email});await loadData();draw();toast('เปิดเหตุแล้ว');}catch(err){toast('ไม่สามารถเปิดเคส (อาจมีเคสเปิดพร้อมกัน): '+err.message,true);}};document.querySelectorAll('[data-case]').forEach(b=>b.onclick=()=>{const c=S.cases.find(x=>x.id===b.dataset.case),el=$('#caseUpdate');el.classList.remove('hide');el.innerHTML=`<h3>อัปเดตเคส: ${esc(fmtEq(c.equipment_id))}</h3><form id="updateCase"><div class="grid2"><div class="field"><label>สถานะ</label><select name="status"><option value="checking">รับเรื่อง / ตรวจสอบ</option><option value="repairing">กำลังซ่อม</option><option value="ready">พร้อมใช้งาน / ปิดเคส</option><option value="cancelled">ยกเลิก / ปิดเคส</option></select></div><div class="field"><label>ชื่อ BEM (บังคับ)</label><input name="first" required></div><div class="field"><label>นามสกุล (ไม่บังคับ)</label><input name="last"></div><div class="field"><label>รายละเอียด</label><input name="note" required></div></div><button class="btn primary">บันทึกการดำเนินงาน</button></form>`;el.scrollIntoView({behavior:'smooth',block:'start'});$('#updateCase').onsubmit=async e=>{e.preventDefault();const d=new FormData(e.target);try{await api('PATCH',`eq_cases?id=eq.${c.id}`,{status:d.get('status'),bem_actor_first:String(d.get('first')).trim(),bem_actor_last:String(d.get('last')).trim()||null,bem_note:String(d.get('note')).trim()});await loadData();draw();toast('BEM อัปเดตสถานะแล้ว');}catch(err){toast(err.message,true);}};});}
-function adminView(){if(S.role!=='admin')return '<p>ไม่มีสิทธิ์</p>';return title('จัดการผู้ใช้งาน','Admin สร้างบัญชีและกำหนดรหัสผ่านเริ่มต้นให้ผู้ใช้')+`<section class="panel"><h3>สร้างบัญชีใหม่</h3><form id="createUserForm" class="grid2"><div class="field"><label>อีเมลเจ้าหน้าที่</label><input type="email" name="email" autocomplete="off" required></div><div class="field"><label>สิทธิ์ผู้ใช้งาน</label><select name="role"><option value="staff">เจ้าหน้าที่แล็บ</option><option value="bem">BEM</option><option value="viewer">อ่านอย่างเดียว</option><option value="admin">Admin</option></select></div><div class="field"><label>รหัสผ่านเริ่มต้น (6 ตัวขึ้นไป)</label><input name="initialpass" type="password" minlength="6" autocomplete="new-password" required></div><div class="field"><label>ยืนยันรหัสผ่านเริ่มต้น</label><input name="confirm" type="password" minlength="6" autocomplete="new-password" required></div><div class="field"><button class="btn primary" type="submit">สร้างบัญชี</button></div></form><p class="note">ผู้ใช้จะถูกบังคับเปลี่ยนรหัสเมื่อเข้าครั้งแรก · รหัสเริ่มต้นไม่ถูกเก็บในตารางหรือส่งผ่านอีเมลจากแอป · โปรดแจ้งรหัสผ่านด้วยช่องทางที่โรงพยาบาลอนุญาต</p></section><section class="panel"><h3>อนุมัติบัญชีที่มีอยู่แล้ว</h3><form id="adminForm" class="grid3"><div class="field"><label>อีเมลที่อยู่ใน Supabase Auth แล้ว</label><input type="email" name="email" required></div><div class="field"><label>บทบาท</label><select name="role"><option value="staff">แล็บ</option><option value="bem">BEM</option><option value="viewer">อ่านอย่างเดียว</option><option value="admin">Admin</option></select></div><div class="field"><label>ปรับสิทธิ์</label><button class="btn">อนุมัติ / เปลี่ยนสิทธิ์</button></div></form><p class="note">บัญชีเดิมไม่ถูกบังคับเปลี่ยนรหัสอัตโนมัติ; สามารถกำหนดให้เปลี่ยนผ่านการตั้งค่าในฐานข้อมูลได้</p></section>`;}
-function mount_admin(){const create=$('#createUserForm');create.onsubmit=async e=>{e.preventDefault();const f=e.target,email=String(f.elements.email.value||'').trim().toLowerCase(),p=String(f.elements.initialpass.value||''),c=String(f.elements.confirm.value||'');if(p.length<6)return toast('รหัสผ่านเริ่มต้นต้องมีอย่างน้อย 6 ตัว',true);if(p!==c)return toast('รหัสผ่านสองช่องไม่ตรงกัน',true);const btn=f.querySelector('[type=submit]');btn.disabled=true;try{const jwt=await authToken();const r=await fetch(`${C.supabaseUrl}/functions/v1/eq-admin-users`,{method:'POST',headers:{apikey:C.publishableKey,Authorization:`Bearer ${jwt}`,'Content-Type':'application/json'},body:JSON.stringify({email,role:f.elements.role.value,password:p})});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok)throw Error(j.error||'สร้างบัญชีไม่สำเร็จ');toast('สร้างบัญชีแล้ว ผู้ใช้ต้องเปลี่ยนรหัสผ่านครั้งแรก');f.reset();}catch(err){toast(err.message,true);}finally{f.elements.initialpass.value='';f.elements.confirm.value='';btn.disabled=false;}};$('#adminForm').onsubmit=async e=>{e.preventDefault();const d=new FormData(e.target),email=String(d.get('email')).trim().toLowerCase();try{await api('POST','eq_members?on_conflict=email',{email,role:d.get('role'),active:true},{headers:{Prefer:'resolution=merge-duplicates,return=representation'}});toast('อัปเดตสิทธิ์แล้ว');e.target.reset();}catch(err){toast(err.message,true);}};}
-// One delegated handler; kept outside redraw so dynamically created buttons still work.
-document.addEventListener('click',e=>{const t=e.target.closest('[data-goto]');if(t){S.view=t.dataset.goto;renderShell();}});
+function adminView(){
+ if(S.role!=='admin')return '<p>ไม่มีสิทธิ์</p>';
+ const pending=S.members.filter(x=>x.approval_status==='pending'&&!x.active);
+ const rows=pending.map(x=>`<div class="list-item" style="gap:12px;align-items:center"><div><b>${esc(x.email)}</b><small>บทบาท: ${esc(x.role==='bem'?'BEM':'เจ้าหน้าที่แล็บ')} · สมัครเมื่อ ${esc(x.requested_at||'-')}</small></div><div class="actions"><button class="btn primary small" data-review="approve" data-email="${esc(x.email)}">อนุมัติ</button><button class="btn small" data-review="reject" data-email="${esc(x.email)}">ไม่อนุมัติ</button></div></div>`).join('');
+ return title('อนุมัติผู้ใช้งาน',`รอพิจารณา ${pending.length} บัญชี`)+
+ `<section class="panel"><h3>รายการสมัครใหม่</h3><div class="list">${rows||'<p class="muted">ยังไม่มีคำขอรออนุมัติ</p>'}</div><p class="note">มหิดล = staff · RFS = bem · สมัครเองและยืนยันอีเมลก่อน · ผู้สมัครไม่สามารถกำหนด Admin ให้ตัวเองได้</p></section>
+ <section class="panel"><h3>ผู้ใช้งานในระบบ</h3><div class="list">${S.members.map(x=>`<div class="list-item"><div><b>${esc(x.email)}</b><small>${esc(x.role)} · ${esc(x.approval_status||'approved')} · ${x.active?'ใช้งานได้':'ยังไม่ได้รับสิทธิ์'}</small></div></div>`).join('')||'<p>ยังไม่มีสมาชิก</p>'}</div></section>`;
+}
+function mount_admin(){
+ document.querySelectorAll('[data-review]').forEach(b=>b.onclick=async()=>{
+  const email=b.dataset.email,action=b.dataset.review;
+  if(!['approve','reject'].includes(action)||!confirm(`${action==='approve'?'อนุมัติ':'ไม่อนุมัติ'} บัญชี ${email} ใช่หรือไม่?`))return;
+  b.disabled=true;
+  try{
+   await api('POST','rpc/eq_review_registration',{p_email:email,p_action:action});
+   await loadData();draw();toast(action==='approve'?'อนุมัติบัญชีเรียบร้อย':'บันทึกการไม่อนุมัติแล้ว');
+  }catch(err){toast(err.message,true);b.disabled=false;}
+ });
+}
 async function init(){if(location.hash.includes('access_token=')){const raw=new URLSearchParams(location.hash.slice(1));const access_token=raw.get('access_token'),refresh_token=raw.get('refresh_token');if(access_token&&refresh_token){saveSession({access_token,refresh_token,expires_in:Number(raw.get('expires_in')||3600)});history.replaceState({},'',location.pathname+location.search);}}loadSession();if(S.token)await startApp();else loginScreen();}
 init().catch(e=>{loginScreen();toast(e.message,true)});
