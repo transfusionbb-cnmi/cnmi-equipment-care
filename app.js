@@ -1,56 +1,3145 @@
-'use strict';
-// Real-data client for the v0.4.0 deployment package. No fake successes or local-only document saves.
-const C=window.CNMI_CONFIG||{},S={token:null,refresh:null,expire:0,email:'',role:'',view:'home',equipment:[],forms:[],rules:[],docs:[],cases:[],cal:[],years:[],plans:[],filter:'',month:new Date().toISOString().slice(0,7),selected:new Set(),uploadFile:null,scanInfo:null,pendingRows:[],importName:''};
-const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const icons={home:'<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>',registry:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',monthly:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M7 2v4M17 2v4M3 9h18M8 14h3"/>',scan:'<path d="M4 9V4h5M15 4h5v5M4 15v5h5M15 20h5v-5M4 12h16"/>',qr:'<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM21 14v7h-6"/>',cal:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',plans:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/>',case:'<path d="M4 4h16v16H4zM8 9h8M8 13h8M8 17h5"/>',admin:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/>'};
-const ico=k=>`<svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">${icons[k]||icons.home}</svg>`;
-function toast(message,error=false){let el=$('#toast');if(!el){el=document.createElement('div');el.id='toast';el.className='message';el.style='position:fixed;right:12px;bottom:12px;max-width:420px;z-index:30;box-shadow:0 3px 18px #103b5333';document.body.append(el);}el.textContent=message;el.className='message'+(error?' error':'');el.hidden=false;setTimeout(()=>el.hidden=true,6000);}
-function validConfig(){return /^https:\/\/[^/]+\.supabase\.co\/?$/.test(C.supabaseUrl||'')&&String(C.publishableKey||'').length>15;}
-function saveSession(x){S.token=x.access_token;S.refresh=x.refresh_token;S.expire=Math.floor(Date.now()/1000)+Number(x.expires_in||3600);sessionStorage.setItem('CNMI_AUTH_V040',JSON.stringify({token:S.token,refresh:S.refresh,expire:S.expire}));}
-function loadSession(){try{const x=JSON.parse(sessionStorage.getItem('CNMI_AUTH_V040')||'null');if(x){S.token=x.token;S.refresh=x.refresh;S.expire=x.expire||0;}}catch{}}
-function resetSession(){sessionStorage.removeItem('CNMI_AUTH_V040');S.token=null;S.refresh=null;S.role='';S.email='';}
-async function authToken(){if(!S.token)throw Error('กรุณาเข้าสู่ระบบ');if(S.expire>Date.now()/1000+90)return S.token;if(!S.refresh)throw Error('เซสชันหมดอายุ');const r=await fetch(`${C.supabaseUrl}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{'apikey':C.publishableKey,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:S.refresh})});const j=await r.json();if(!r.ok)throw Error('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');saveSession(j);return S.token;}
-async function api(method,path,data,opts={}){const token=await authToken();const headers={'apikey':C.publishableKey,'Authorization':`Bearer ${token}`,'Content-Type':'application/json',...(method==='POST'?{'Prefer':'return=representation'}:{}),...opts.headers};const r=await fetch(`${C.supabaseUrl}/rest/v1/${path}`,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});const txt=await r.text();if(!r.ok)throw Error(`Supabase ${r.status}: ${txt.slice(0,190)}`);return txt?JSON.parse(txt):[];}
-async function get(path){return api('GET',path);}
-async function submitLogin(e){e.preventDefault();const f=e.target;const email=String(f.email.value||'').trim().toLowerCase();if(!email.includes('@'))return toast('กรุณากรอกอีเมล',true);const pass=String(f.password.value||'');try{if(pass){const r=await fetch(`${C.supabaseUrl}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:C.publishableKey,'Content-Type':'application/json'},body:JSON.stringify({email,password:pass})});const x=await r.json();if(!r.ok)throw Error(x.msg||x.error_description||x.message||'ชื่อบัญชีหรือรหัสผ่านไม่ถูกต้อง');saveSession(x);await startApp();}else{const r=await fetch(`${C.supabaseUrl}/auth/v1/otp`,{method:'POST',headers:{apikey:C.publishableKey,'Content-Type':'application/json'},body:JSON.stringify({email,create_user:true,email_redirect_to:location.href.split('#')[0]})});if(!r.ok)throw Error('ส่งลิงก์เข้าอีเมลไม่สำเร็จ');toast('ส่งลิงก์เข้าระบบไปที่อีเมลแล้ว (ตรวจ Junk หากไม่พบ)');}}catch(err){toast(err.message,true);}}
-function googleLogin(){location.href=`${C.supabaseUrl}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(location.href.split('#')[0])}`;}
-function loginScreen(){let configOk=validConfig();$('#app').innerHTML=`<main class="login"><section class="panel"><h1>CNMI Equipment Care</h1><p class="muted">ทะเบียนเครื่องมือ · เอกสารรายเดือน · BEM</p>${!configOk?'<p class="message error">ยังไม่ได้ตั้งค่า Supabase URL และ Publishable/Anon Key ใน site/config.js กรุณาตั้งค่าก่อนเปิดใช้งานออนไลน์</p>':''}<form id="loginForm" class="stack"><div class="field"><label>อีเมลที่ Admin อนุญาต</label><input name="email" type="email" autocomplete="email" required placeholder="อีเมลมหิดล / อีเมลบัญชี BEM"></div><div class="field"><label>รหัสผ่าน (เฉพาะบัญชี BEM หรือบัญชีที่ตั้งรหัส)</label><input name="password" type="password" autocomplete="current-password" placeholder="เว้นว่างเพื่อรับลิงก์เข้าอีเมล"></div><button class="btn primary" type="submit" ${configOk?'':'disabled'}>เข้าสู่ระบบ / ส่งลิงก์ทางอีเมล</button></form><div style="margin:10px 0" class="actions"><button class="btn" id="googleLogin" ${configOk?'':'disabled'}>เข้าสู่ระบบด้วย Google</button></div><p class="note">ต้องอยู่ในรายชื่อที่ Admin อนุญาตจึงจะอ่านข้อมูลได้ • บัญชี BEM ต้องบันทึกชื่อผู้ปฏิบัติงานทุกครั้ง</p></section></main>`;$('#loginForm').addEventListener('submit',submitLogin);$('#googleLogin').addEventListener('click',googleLogin);}
-async function loadData(){const [equip,forms,rules,docs,cases,cal,imports,plans]=await Promise.all([get('eq_equipment?select=*&order=asset_new.asc&limit=1000'),get('eq_forms?select=*&order=code.asc&limit=1000'),get('eq_monthly_rules?select=*&limit=1000'),get('eq_documents?select=*&order=uploaded_at.desc&limit=1000'),get('eq_cases?select=*&order=created_at.desc&limit=1000'),get('eq_cal_specs?select=*&order=created_at.desc&limit=1000'),get('eq_year_imports?select=*&order=imported_at.desc&limit=1000'),get('eq_year_plan_rows?select=*&limit=1000')]);Object.assign(S,{equipment:equip,forms,rules,docs,cases,cal,years:imports,plans});window.EQUIPMENT_REGISTRY=equip;window.FORM_CATALOG=forms;}
-async function startApp(){try{if(!validConfig())return loginScreen();const t=await authToken();const u=await fetch(`${C.supabaseUrl}/auth/v1/user`,{headers:{apikey:C.publishableKey,Authorization:`Bearer ${t}`}});if(!u.ok)throw Error('เข้าสู่ระบบไม่สำเร็จ');const user=await u.json();S.email=String(user.email||'').toLowerCase();const member=await get(`eq_members?email=eq.${encodeURIComponent(S.email)}&active=eq.true&select=role`);if(!member.length)throw Error('บัญชีนี้ยังไม่ได้รับสิทธิ์จาก Admin กรุณาให้ Admin เพิ่มอีเมลใน eq_members');S.role=member[0].role;await loadData();renderShell();}catch(e){resetSession();loginScreen();toast(e.message,true);}}
-function navItems(){return [['home','ภาพรวม'],['registry','ทะเบียน'],['monthly','เอกสารรายเดือน'],['scan','สแกน PDF'],['qr','พิมพ์ QR'],['cal','จุด CAL'],['plans','แผน Y'],['case','งาน BEM'],...(S.role==='admin'?[['admin','สิทธิ์ผู้ใช้']]:[])];}
-function renderShell(){const nav=navItems().map(([id,label])=>`<button class="nav ${S.view===id?'active':''}" data-go="${id}">${ico(id)}<span>${label}</span></button>`).join('');$('#app').innerHTML=`<div class="layout"><aside class="sidebar"><div class="side-title">CNMI EQUIPMENT</div>${nav}</aside><div class="main"><header class="top"><div class="brand">Equipment Care <span class="pill good">ONLINE</span></div><div style="text-align:right"><small>${esc(S.email)} (${esc(S.role)})</small> <button class="btn small" id="logout">ออก</button></div></header><main class="content" id="page"></main></div></div>`;$('#logout').onclick=()=>{resetSession();loginScreen();};document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{S.view=b.dataset.go;renderShell()});draw();}
-const title=(h,p='')=>`<div class="heading"><div><h1>${h}</h1>${p?`<p class="hint">${p}</p>`:''}</div><button class="btn small" id="refresh">↻ รีเฟรช</button></div>`;
-function attachRefresh(){const b=$('#refresh');if(b)b.onclick=async()=>{try{await loadData();draw();toast('อัปเดตข้อมูลจาก Supabase แล้ว');}catch(e){toast(e.message,true);}};}
-function draw(){const p=$('#page');if(!p)return;const m={home:homeView,registry:registryView,monthly:monthlyView,scan:scanView,qr:qrView,cal:calView,plans:plansView,case:caseView,admin:adminView};p.innerHTML=(m[S.view]||homeView)();attachRefresh();const f=window['mount_'+S.view];if(typeof f==='function')f();}
-const eqMap=()=>Object.fromEntries(S.equipment.map(e=>[e.id,e]));const formMap=()=>Object.fromEntries(S.forms.map(f=>[f.id,f]));const fmtEq=id=>{const e=eqMap()[id];return e?`${e.asset_new} · ${e.category_th}`:id};const fmtForm=id=>{const f=formMap()[id];return f?`${f.code||'ไม่มี FM'} · ${f.short_label}`:id};
-const opts=(rows,value,label,selected='')=>rows.map(r=>`<option value="${esc(r[value])}" ${selected===r[value]?'selected':''}>${esc(typeof label==='function'?label(r):r[label])}</option>`).join('');
-const eqSelect=(name='equipment',selected='')=>`<select name="${name}" required><option value="">เลือกเครื่องมือ…</option>${opts(S.equipment,'id',e=>e.asset_new+' · '+e.category_th,selected)}</select>`;
-const formSelect=(name='form',selected='')=>`<select name="${name}" required><option value="">เลือกแบบฟอร์ม…</option>${opts(S.forms,'id',f=>(f.code||'ไม่มี FM')+' · '+f.short_label,selected)}</select>`;
-function monthDate(m){return m+'-01';}function currentRules(){return S.rules.filter(r=>r.active&&r.start_month<=monthDate(S.month));}
-function docFor(r){return S.docs.find(d=>d.equipment_id===r.equipment_id&&d.form_id===r.form_id&&d.doc_month===monthDate(S.month)&&d.status==='stored');}
-function homeView(){const missing=currentRules().filter(r=>!docFor(r)).length,open=S.cases.filter(c=>!c.closed_at).length;return title('ภาพรวม','ข้อมูลจาก Supabase (ไม่ใช่ข้อมูลจำลอง)')+`<div class="cards"><div class="metric"><b>${S.equipment.length}</b><span>ทะเบียนเครื่องมือ</span></div><div class="metric"><b>${missing}</b><span>เอกสารเดือนนี้ที่ยังไม่ครบ</span></div><div class="metric"><b>${open}</b><span>งานที่ยังเปิดอยู่</span></div><div class="metric"><b>${S.docs.filter(d=>d.status==='stored').length}</b><span>PDF ใน Google Drive</span></div></div><section class="panel"><h3>เริ่มงาน</h3><div class="actions"><button class="btn primary" data-goto="scan">สแกนเอกสาร</button><button class="btn" data-goto="monthly">ตรวจเอกสารรายเดือน</button><button class="btn" data-goto="case">แจ้งเครื่องผิดปกติ</button></div></section><section class="panel"><h3>สถานะการเชื่อมต่อ</h3><p>Supabase: เชื่อมต่อแล้ว • Google Drive: จะตรวจเมื่ออัปโหลดครั้งแรก</p><p class="note">แอปอุณหภูมิเดิมยังไม่เชื่อมสองทาง ห้ามตีความว่าเหตุผิดปกติจากตู้เย็นแสดงครบในระบบนี้</p></section>`;}
-function registryView(){const term=S.filter.toLowerCase(),rows=S.equipment.filter(e=>[e.asset_new,e.serial_no,e.inventory_no,e.category_th,e.brand,e.model].join(' ').toLowerCase().includes(term));return title('ทะเบียนเครื่องมือ','ค้นจาก ASSET / Serial / เลขครุภัณฑ์')+`<section class="panel"><div class="toolbar"><input id="search" placeholder="ค้นหาเครื่องมือ…" value="${esc(S.filter)}"><span class="muted">${rows.length} รายการ</span></div><div class="table-wrap"><table><thead><tr><th>ASSET</th><th>เครื่องมือ</th><th>ยี่ห้อ / รุ่น</th><th>Serial</th></tr></thead><tbody>${rows.slice(0,350).map(e=>`<tr><td><b>${esc(e.asset_new)}</b></td><td>${esc(e.category_th)}</td><td>${esc([e.brand,e.model].filter(Boolean).join(' / '))}</td><td>${esc(e.serial_no||'-')}</td></tr>`).join('')}</tbody></table></div></section>`;}
-function mount_registry(){$('#search').oninput=e=>{S.filter=e.target.value;const pos=e.target.selectionStart;draw();const i=$('#search');i.focus();i.setSelectionRange(pos,pos);};}
-function monthlyView(){const rows=currentRules(),missing=rows.filter(r=>!docFor(r)).length;return title('เอกสารรายเดือน',`เดือน ${S.month} • ต้องส่ง ${rows.length} • ค้าง ${missing}`)+`<section class="panel"><div class="toolbar"><input type="month" id="month" value="${S.month}" style="max-width:220px"><button class="btn" data-goto="qr">พิมพ์ QR ตามเดือน</button></div><div class="list">${rows.length?rows.map(r=>{const d=docFor(r);return `<div class="list-item"><div><b>${esc(fmtEq(r.equipment_id))}</b><small>${esc(fmtForm(r.form_id))}</small></div><span class="pill ${d?'good':'bad'}">${d?'แนบแล้ว':'ยังไม่ครบ'}</span></div>`;}).join(''):'<div class="empty">ยังไม่มีข้อกำหนดรายเดือนของเดือนนี้</div>'}</div></section>${['admin','staff'].includes(S.role)?`<section class="panel"><h3>กำหนดให้ต้องส่งทุกเดือน</h3><form id="ruleForm" class="grid2"><div class="field"><label>เครื่องมือ</label>${eqSelect()}</div><div class="field"><label>แบบฟอร์ม</label>${formSelect()}</div><div class="field"><label>เริ่มเดือน</label><input name="start" type="month" value="${S.month}" required></div><div class="field"><label>บันทึกข้อกำหนด</label><button class="btn primary">บังคับส่งทุกเดือน</button></div></form><hr/><h3>จัดการรายการที่กำหนด</h3><div class="list scroll-list">${S.rules.map(r=>`<div class="list-item"><div><b>${esc(fmtEq(r.equipment_id))}</b><small>${esc(fmtForm(r.form_id))} · เริ่ม ${r.start_month.slice(0,7)}</small></div><button class="btn small" data-toggle-rule="${r.id}" data-active="${r.active}">${r.active?'พัก':'เปิด'}</button></div>`).join('')}</div></section>`:''}`;}
-function mount_monthly(){$('#month').onchange=e=>{S.month=e.target.value;draw();};const f=$('#ruleForm');if(f)f.onsubmit=async e=>{e.preventDefault();const d=new FormData(f),equipment_id=d.get('equipment'),form_id=d.get('form'),start_month=monthDate(d.get('start'));try{const hit=S.rules.find(r=>r.equipment_id===equipment_id&&r.form_id===form_id);if(hit)await api('PATCH',`eq_monthly_rules?id=eq.${hit.id}`,{start_month,active:true,updated_at:new Date().toISOString()});else await api('POST','eq_monthly_rules',{equipment_id,form_id,start_month,created_by:S.email});await loadData();draw();toast('กำหนดส่งทุกเดือนแล้ว');}catch(err){toast(err.message,true);}};document.querySelectorAll('[data-toggle-rule]').forEach(b=>b.onclick=async()=>{try{await api('PATCH',`eq_monthly_rules?id=eq.${b.dataset.toggleRule}`,{active:b.dataset.active!=='true'});await loadData();draw();}catch(e){toast(e.message,true);}});}
-function scanView(){return title('รับเอกสารสแกน','HP / Canon → Save PDF → เลือกไฟล์ → อ่าน QR → ยืนยัน')+`<section class="panel"><div class="field"><label>1. ไฟล์จากเครื่องสแกน (PDF ไม่เกิน 8 MB)</label><input id="scanFile" type="file" accept="application/pdf,.pdf"></div><div class="actions"><button class="btn primary" id="readQR">อ่าน QR ใน PDF</button><button class="btn" id="manualQR">เลือกข้อมูลเอง</button></div><div id="scanResult" class="message" style="margin-top:10px">ยังไม่เลือกไฟล์</div></section><section class="panel"><h3>2. ตรวจข้อมูลก่อนจัดเก็บ</h3><form id="docForm"><div class="grid2"><div class="field"><label>เครื่องมือ</label>${eqSelect()}</div><div class="field"><label>แบบฟอร์ม</label>${formSelect()}</div><div class="field"><label>เดือนของเอกสาร</label><input name="month" type="month" value="${S.month}" required></div><div class="field"><label>ชื่อผู้สแกน</label><input name="actor" required placeholder="ชื่อผู้ปฏิบัติงาน"></div></div><p class="note">PDF จะส่งไป Google Drive ผ่าน Supabase Edge Function หลังยืนยันเท่านั้น หากมีไฟล์เดิม จะสร้าง Revision ใหม่</p><button class="btn primary" id="savePdf" type="submit">จัดเก็บลง Google Drive</button></form></section><section class="panel"><h3>PDF ที่บันทึกแล้ว</h3><div class="list scroll-list">${S.docs.filter(d=>d.status==='stored').slice(0,70).map(d=>`<div class="list-item"><div><b>${esc(d.file_name)}</b><small>R${d.revision} · ${esc(d.uploader_email)}</small></div><button class="btn small" data-download="${d.id}">เปิด</button></div>`).join('')||'<div class="empty">ยังไม่มีเอกสาร</div>'}</div></section>`;}
-function mount_scan(){const f=$('#scanFile');f.onchange=()=>{S.uploadFile=f.files?.[0]||null;S.scanInfo=null;$('#scanResult').textContent=S.uploadFile?`เลือกไฟล์: ${S.uploadFile.name}`:'ยังไม่เลือกไฟล์';};$('#readQR').onclick=async()=>{if(!S.uploadFile)return toast('เลือกไฟล์ PDF ก่อน',true);$('#scanResult').textContent='กำลังอ่าน QR…';try{const read=await window.CNMI_SCAN.scan(S.uploadFile);if(read.conflict){S.scanInfo=null;$('#scanResult').className='message error';$('#scanResult').textContent='พบ QR หลายเครื่องในไฟล์เดียว กรุณาแยกสแกน ไม่ให้บันทึก';return;}const data=window.CNMI_SCAN.parsePayload(read.value);if(['monthly','permanent'].includes(data.mode)&&data.type==='equipment'){const machine=S.equipment.find(x=>x.asset_new===data.target);if(machine&&S.forms.some(x=>x.id===data.formId)){$('#docForm [name=equipment]').value=machine.id;$('#docForm [name=form]').value=data.formId;if(data.period)$('#docForm [name=month]').value=data.period;S.scanInfo=data;$('#scanResult').className='message';$('#scanResult').textContent=`จับคู่สำเร็จ: ${machine.asset_new} / ${fmtForm(data.formId)}${data.period?' / '+data.period:' — กรุณาเลือกเดือน'}`;return;}}S.scanInfo=null;$('#scanResult').className='message error';$('#scanResult').textContent=`ไม่พบ QR ที่จับคู่ได้ (${read.reason||data.message||'ไม่รู้จัก QR'}) กรุณาเลือกข้อมูลเอง`;}catch(e){S.scanInfo=null;$('#scanResult').className='message error';$('#scanResult').textContent=e.message;}};$('#manualQR').onclick=()=>{$('#scanResult').textContent='เลือกเครื่องมือ แบบฟอร์ม และเดือนด้วยตนเองได้';S.scanInfo=null;};$('#docForm').onsubmit=async e=>{e.preventDefault();if(!S.uploadFile)return toast('ยังไม่ได้เลือก PDF',true);if(S.uploadFile.size>8*1024*1024)return toast('ไฟล์ใหญ่เกิน 8 MB กรุณาลดขนาด PDF',true);if(S.uploadFile.type&&!/pdf/i.test(S.uploadFile.type)&&!/\.pdf$/i.test(S.uploadFile.name))return toast('รองรับ PDF เท่านั้น',true);const d=new FormData(e.target),id=d.get('equipment'),fid=d.get('form'),month=d.get('month');if(!id||!fid||!month||!String(d.get('actor')||'').trim())return toast('กรุณากรอกข้อมูลให้ครบ',true);const b=$('#savePdf');b.disabled=true;b.textContent='กำลังส่งเข้า Google Drive…';try{const body=new FormData();body.append('file',S.uploadFile);body.append('equipment_id',id);body.append('form_id',fid);body.append('month',month);body.append('actor',String(d.get('actor')||'').trim());const jwt=await authToken();const r=await fetch(`${C.supabaseUrl}/functions/v1/drive-document`,{method:'POST',headers:{apikey:C.publishableKey,Authorization:`Bearer ${jwt}`},body});const j=await r.json();if(!r.ok||!j.ok)throw Error(j.error||'อัปโหลดไม่สำเร็จ');S.uploadFile=null;await loadData();draw();toast('บันทึก Google Drive สำเร็จ: '+j.file_name);}catch(err){toast(err.message,true);b.disabled=false;b.textContent='จัดเก็บลง Google Drive';}};document.querySelectorAll('[data-download]').forEach(b=>b.onclick=()=>openDriveFile(b.dataset.download));}
-async function openDriveFile(id){try{const jwt=await authToken();const r=await fetch(`${C.supabaseUrl}/functions/v1/drive-document?id=${encodeURIComponent(id)}`,{headers:{apikey:C.publishableKey,Authorization:`Bearer ${jwt}`}});if(!r.ok){const j=await r.json();throw Error(j.error||'เปิดไฟล์ไม่ได้');}const blob=await r.blob(),url=URL.createObjectURL(blob);window.open(url,'_blank','noopener');setTimeout(()=>URL.revokeObjectURL(url),120000);}catch(e){toast(e.message,true);}}
-function qrView(){const rows=currentRules().filter(r=>!!eqMap()[r.equipment_id]&&!!formMap()[r.form_id]),missing=rows.filter(r=>!docFor(r));return title('พิมพ์ QR เป็นชุด',`สติกเกอร์ม้วน 20×25 มม. · QR 15×15 มม. · เดือน ${S.month}`)+`<section class="panel"><div class="toolbar"><input type="month" id="qrMonth" value="${S.month}" style="max-width:220px"><button class="btn" id="allQr">เลือกทั้งหมด</button><button class="btn" id="missingQr">เฉพาะค้าง (${missing.length})</button><button class="btn" id="clearQr">ล้าง</button></div><div class="list scroll-list">${rows.map(r=>{const id=r.id,checked=S.selected.has(id);return `<label class="doc-label"><input type="checkbox" data-qrcheck="${id}" ${checked?'checked':''}><div class="fill"><b>${esc(fmtEq(r.equipment_id))}</b><small>${esc(fmtForm(r.form_id))}</small></div><span class="pill ${docFor(r)?'good':'bad'}">${docFor(r)?'ครบ':'ค้าง'}</span></label>`;}).join('')||'<div class="empty">ต้องกำหนดให้ส่งรายเดือนก่อนจึงจะพิมพ์เป็นชุดได้</div>'}</div><hr/><div class="actions"><button class="btn primary" id="printQR">พิมพ์สติกเกอร์ที่เลือก (<span id="qrCount">${S.selected.size}</span>)</button></div><p class="note">พิมพ์ครั้งเดียวต่อเนื่อง 1 ดวงต่อหน้า เครื่องพิมพ์ม้วนต้องตั้ง 20 × 25 มม. / Actual size 100% ช่องว่าง 0.2 มม. ตั้งที่ Driver ของเครื่องพิมพ์จริง</p></section>`;}
-function mount_qr(){const reset=()=>{S.selected=new Set();draw();};$('#qrMonth').onchange=e=>{S.month=e.target.value;reset();};$('#allQr').onclick=()=>{S.selected=new Set(currentRules().map(r=>r.id));draw();};$('#missingQr').onclick=()=>{S.selected=new Set(currentRules().filter(r=>!docFor(r)).map(r=>r.id));draw();};$('#clearQr').onclick=reset;document.querySelectorAll('[data-qrcheck]').forEach(c=>c.onchange=()=>{if(c.checked)S.selected.add(c.dataset.qrcheck);else S.selected.delete(c.dataset.qrcheck);$('#qrCount').textContent=S.selected.size;});$('#printQR').onclick=()=>{const items=currentRules().filter(r=>S.selected.has(r.id));if(!items.length)return toast('ยังไม่ได้เลือกสติกเกอร์',true);if(items.length>150)return toast('หนึ่งรอบพิมพ์ได้ไม่เกิน 150 ดวง',true);const pages=items.map(r=>{const e=eqMap()[r.equipment_id],f=formMap()[r.form_id];const payload=['ECM1',f.id,'E',e.asset_new,S.month].join('|');const qr=window.CNMI_QR.svg(payload);return `<div class="label"><div class="code">${qr}</div><div class="caption"><b>${esc(f.code||f.id)}</b><span>${esc(f.short_label)}</span><strong>${esc(e.asset_new)} · ${S.month}</strong></div></div>`;}).join('');const w=window.open('','_blank');if(!w)return toast('เบราว์เซอร์บล็อกหน้าต่างพิมพ์ กรุณาอนุญาต Pop-ups',true);w.document.open();w.document.write(`<!doctype html><html><head><title>CNMI QR Roll</title><style>@page{size:20mm 25mm;margin:0}html,body{margin:0;padding:0}.label{width:20mm;height:25mm;overflow:hidden;page-break-after:always;break-after:page;display:flex;align-items:center;flex-direction:column;justify-content:flex-start;background:#fff;color:#000}.code{height:15mm;width:15mm;margin-top:.3mm}.code svg{width:15mm!important;height:15mm!important}.caption{width:19.5mm;text-align:center;display:flex;flex-direction:column;line-height:1.0;gap:.35mm;margin-top:.35mm;font-family:Arial,sans-serif}.caption b{font-size:5pt;overflow:hidden;white-space:nowrap}.caption span{font-size:4.8pt;white-space:nowrap;overflow:hidden}.caption strong{font-size:4.6pt;white-space:nowrap;overflow:hidden}@media screen{body{background:#ddd}.label{margin:10px auto;box-shadow:0 0 2px #777}}@media print{.label:last-child{page-break-after:auto;break-after:auto}}</style></head><body>${pages}</body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),400);};}
-function calView(){return title('จุด Calibration ของแล็บ','แล็บกำหนดงานที่ใช้และจุดสอบเทียบ BEM อ่านได้')+`<section class="panel"><form id="calForm"><div class="grid2"><div class="field"><label>เครื่องมือ</label>${eqSelect()}</div><div class="field"><label>ใช้กับงานอะไร</label><input name="purpose" required placeholder="ระบุงานที่ใช้จริง"></div><div class="field"><label>พารามิเตอร์</label><select name="parameter"><option value="volume">ปริมาตร</option><option value="time">เวลา</option><option value="temperature">อุณหภูมิ</option><option value="speed">ความเร็วรอบ</option><option value="other">อื่น ๆ</option></select></div><div class="field"><label>หน่วย</label><input name="unit" required placeholder="เช่น µL, s, °C, rpm"></div></div><div class="field"><label>จุดสอบเทียบ (หนึ่งจุดต่อหนึ่งบรรทัด)</label><textarea name="points" rows="5" required placeholder="ระบุค่าที่ต้องการสอบเทียบ ไม่กำหนดให้ล่วงหน้า"></textarea></div>${['admin','staff'].includes(S.role)?'<button class="btn primary">บันทึกข้อกำหนดใหม่ (Revision)</button>':'<p class="note">เฉพาะแล็บ/Admin มีสิทธิ์แก้ไข</p>'}</form></section><section class="panel"><h3>ข้อกำหนดที่บันทึกแล้ว</h3><div class="list">${S.cal.slice(0,100).map(x=>`<div class="list-item"><div><b>${esc(fmtEq(x.equipment_id))} · R${x.revision}</b><small>${esc(x.purpose)} · ${esc(x.parameter)} (${esc(x.unit)}): ${esc((x.points||[]).join(', '))}</small></div></div>`).join('')||'<div class="empty">ยังไม่มีข้อกำหนด</div>'}</div></section>`;}
-function mount_cal(){const f=$('#calForm');if(!['admin','staff'].includes(S.role))return;f.onsubmit=async e=>{e.preventDefault();const d=new FormData(f),id=d.get('equipment'),purpose=String(d.get('purpose')||'').trim(),unit=String(d.get('unit')||'').trim(),points=String(d.get('points')||'').split('\n').map(x=>x.trim()).filter(Boolean);if(!id||!purpose||!unit||!points.length)return toast('กรอกข้อมูล CAL ให้ครบ',true);const rev=Math.max(0,...S.cal.filter(x=>x.equipment_id===id).map(x=>x.revision))+1;try{await api('POST','eq_cal_specs',{equipment_id:id,revision:rev,purpose,unit,parameter:d.get('parameter'),points,actor_email:S.email});await loadData();draw();toast('บันทึกจุด CAL แล้ว');}catch(err){toast(err.message,true);}};}
-function plansView(){return title('นำเข้าแผน Y ประจำปี','อัปโหลด Excel แล้วตรวจรายการก่อนบันทึก ไม่ทับแผนปีเก่า')+`<section class="panel"><form id="yForm"><div class="grid2"><div class="field"><label>ปี ค.ศ. ของแผน</label><input name="year" type="number" min="2020" max="2100" value="${new Date().getFullYear()+1}" required></div><div class="field"><label>ประเภทแผน</label><select name="kind"><option value="PM">PM</option><option value="CAL">Calibration</option></select></div><div class="field"><label>ไฟล์ Excel จาก BEM (.xlsx)</label><input name="file" type="file" accept=".xlsx" required></div><div class="field"><label>อ่านข้อมูล</label><button class="btn" type="submit">แสดงตัวอย่าง</button></div></div></form><div id="yPreview">${S.pendingRows.length?previewPlans():''}</div></section><section class="panel"><h3>ไฟล์แผนที่นำเข้าแล้ว</h3>${S.years.slice(0,70).map(i=>`<div class="list-item"><div><b>${i.plan_year} · ${esc(i.plan_kind)} · ${esc(i.file_name)}</b><small>${i.row_count} จุดแผน · ${esc(i.imported_by)}</small></div></div>`).join('')||'<div class="empty">ยังไม่มีแผน</div>'}</section>`;}
-function nameMonth(h){const z=String(h).toLowerCase().trim().replace(/\./g,'');const arr=[['มกราคม','มค','jan','january'],['กุมภาพันธ์','กพ','feb','february'],['มีนาคม','มีค','mar','march'],['เมษายน','เมย','apr','april'],['พฤษภาคม','พค','may'],['มิถุนายน','มิย','jun','june'],['กรกฎาคม','กค','jul','july'],['สิงหาคม','สค','aug','august'],['กันยายน','กย','sep','september'],['ตุลาคม','ตค','oct','october'],['พฤศจิกายน','พย','nov','november'],['ธันวาคม','ธค','dec','december']];return arr.findIndex(a=>a.some(v=>z===v||z===v+'-Y'))+1;}
-function matchEquipment(value){const x=String(value||'').trim().toUpperCase().replace(/\s+/g,'');if(!x)return null;for(const key of ['asset_new','inventory_no','serial_no']){const matches=S.equipment.filter(e=>String(e[key]||'').trim().toUpperCase().replace(/\s+/g,'')===x);if(matches.length===1)return matches[0];if(matches.length>1)return null;}return null;}
-function previewPlans(){const found=S.pendingRows.filter(r=>r.equipment_id),missing=S.pendingRows.filter(r=>!r.equipment_id);return `<div class="message">พบ ${found.length} จุดแผน · ต้องตรวจสอบ ${missing.length} รายการ (จะไม่สร้างเครื่องมืออัตโนมัติ)</div>${missing.length?`<details><summary>ดูรายการที่จับคู่ไม่ได้</summary><p>${missing.slice(0,30).map(x=>esc(x.raw)).join(', ')}</p></details>`:''}${found.length?'<button class="btn primary" id="saveY">ยืนยันนำเข้ารายการที่จับคู่ได้</button>':''}`;}
-function mount_plans(){const f=$('#yForm');f.onsubmit=async e=>{e.preventDefault();if(!['admin','bem'].includes(S.role))return toast('เฉพาะ BEM/Admin นำเข้าแผนได้',true);const d=new FormData(f),file=d.get('file');try{const sheet=(await window.CNMI_XLSX.load(file))[0];if(!sheet)throw Error('ไม่พบข้อมูล Excel');let headIndex=sheet.rows.findIndex(r=>r.values.some(v=>/asset|ครุภัณฑ์|serial/i.test(String(v||''))) && r.values.some(v=>nameMonth(v)>0));if(headIndex<0)throw Error('ไม่พบแถวหัวตารางที่มี ASSET/ครุภัณฑ์/Serial และชื่อเดือน ขอไฟล์ที่มีคอลัมน์เหล่านี้ก่อน');const headers=sheet.rows[headIndex].values,assetIdx=headers.findIndex(x=>/asset|ครุภัณฑ์|serial/i.test(String(x||'')));const months=headers.map(nameMonth);const results=[];for(const r of sheet.rows.slice(headIndex+1)){const raw=r.values[assetIdx];if(!raw)continue;for(let c=0;c<months.length;c++){if(!months[c]||!/^y$/i.test(String(r.values[c]||'').trim()))continue;results.push({raw:String(raw),equipment_id:matchEquipment(raw)?.id||null,plan_month:months[c]});}}if(!results.length)throw Error('ไม่พบ Y ในคอลัมน์เดือนของไฟล์');S.pendingRows=results;S.importName=file.name;S.importYear=Number(d.get('year'));S.importKind=String(d.get('kind'));$('#yPreview').innerHTML=previewPlans();$('#saveY')?.addEventListener('click',saveY); }catch(err){toast(err.message,true);}};}
-async function saveY(){const ok=S.pendingRows.filter(r=>r.equipment_id);if(!ok.length)return;const btn=$('#saveY');btn.disabled=true;try{const imports=await api('POST','eq_year_imports',{plan_year:S.importYear,plan_kind:S.importKind,file_name:S.importName,imported_by:S.email,row_count:ok.length});const iid=imports[0]?.id;if(!iid)throw Error('สร้างประวัติ Import ไม่สำเร็จ');const rows=ok.map(r=>({import_id:iid,equipment_id:r.equipment_id,plan_month:r.plan_month}));await api('POST','eq_year_plan_rows',rows);S.pendingRows=[];await loadData();draw();toast('นำเข้าแผน Y สำเร็จ '+rows.length+' รายการ');}catch(e){btn.disabled=false;toast(e.message,true);}}
-function caseView(){return title('เหตุเครื่องมือผิดปกติ / BEM','หนึ่งเครื่องมือมีเคสเปิดอยู่ได้เพียงหนึ่งเคส')+`<section class="panel"><form id="caseForm"><div class="field"><label>เครื่องมือ</label>${eqSelect()}</div><div class="field"><label>อาการ / เหตุผิดปกติ</label><textarea name="description" rows="2" required placeholder="ระบุอาการที่พบ"></textarea></div>${['admin','staff','bem'].includes(S.role)?'<button class="btn primary">เปิดเหตุใหม่</button>':''}</form></section><section class="panel"><h3>รายการติดตาม</h3><div class="list">${S.cases.slice(0,100).map(c=>`<div class="list-item"><div><b>${esc(fmtEq(c.equipment_id))}</b><small>${esc(c.description)}</small><small>${esc(c.bem_actor_first||'')} · ${esc(c.bem_note||'')}</small></div><div><span class="status ${c.closed_at?'closed':'open'}">${esc(c.status)}</span>${!c.closed_at&&['admin','bem'].includes(S.role)?`<button class="btn small" data-case="${c.id}" style="display:block;margin-top:8px">อัปเดต</button>`:''}</div></div>`).join('')||'<div class="empty">ยังไม่มีเคส</div>'}</div></section><div id="caseUpdate" class="panel hide"></div>`;}
-function mount_case(){const f=$('#caseForm');f.onsubmit=async e=>{e.preventDefault();const d=new FormData(f),equipment_id=d.get('equipment'),description=String(d.get('description')||'').trim();if(S.cases.some(c=>c.equipment_id===equipment_id&&!c.closed_at))return toast('เครื่องนี้มีเคสเปิดอยู่แล้ว โปรดอัปเดตเคสเดิม',true);try{await api('POST','eq_cases',{equipment_id,description,opened_by_email:S.email});await loadData();draw();toast('เปิดเหตุแล้ว');}catch(err){toast('ไม่สามารถเปิดเคส (อาจมีเคสเปิดพร้อมกัน): '+err.message,true);}};document.querySelectorAll('[data-case]').forEach(b=>b.onclick=()=>{const c=S.cases.find(x=>x.id===b.dataset.case),el=$('#caseUpdate');el.classList.remove('hide');el.innerHTML=`<h3>อัปเดตเคส: ${esc(fmtEq(c.equipment_id))}</h3><form id="updateCase"><div class="grid2"><div class="field"><label>สถานะ</label><select name="status"><option value="checking">รับเรื่อง / ตรวจสอบ</option><option value="repairing">กำลังซ่อม</option><option value="ready">พร้อมใช้งาน / ปิดเคส</option><option value="cancelled">ยกเลิก / ปิดเคส</option></select></div><div class="field"><label>ชื่อ BEM (บังคับ)</label><input name="first" required></div><div class="field"><label>นามสกุล (ไม่บังคับ)</label><input name="last"></div><div class="field"><label>รายละเอียด</label><input name="note" required></div></div><button class="btn primary">บันทึกการดำเนินงาน</button></form>`;el.scrollIntoView({behavior:'smooth',block:'start'});$('#updateCase').onsubmit=async e=>{e.preventDefault();const d=new FormData(e.target);try{await api('PATCH',`eq_cases?id=eq.${c.id}`,{status:d.get('status'),bem_actor_first:String(d.get('first')).trim(),bem_actor_last:String(d.get('last')).trim()||null,bem_note:String(d.get('note')).trim()});await loadData();draw();toast('BEM อัปเดตสถานะแล้ว');}catch(err){toast(err.message,true);}};});}
-function adminView(){if(S.role!=='admin')return '<p>ไม่มีสิทธิ์</p>';return title('จัดการสิทธิ์','Admin เพิ่มอีเมลที่ได้รับอนุญาตได้เอง')+`<section class="panel"><form id="adminForm" class="grid3"><div class="field"><label>อีเมล</label><input type="email" name="email" required></div><div class="field"><label>บทบาท</label><select name="role"><option value="staff">แล็บ</option><option value="bem">BEM</option><option value="viewer">อ่านอย่างเดียว</option><option value="admin">Admin</option></select></div><div class="field"><label>อนุญาต</label><button class="btn primary">เพิ่ม / เปลี่ยนสิทธิ์</button></div></form><p class="note">บัญชี BEM กลางให้ตั้งรหัสผ่านผ่าน Supabase Auth โดยผู้ดูแล ห้ามแชร์รหัสใน Chat หรือโค้ด</p></section>`;}
-function mount_admin(){$('#adminForm').onsubmit=async e=>{e.preventDefault();const d=new FormData(e.target),email=String(d.get('email')).trim().toLowerCase();try{await api('POST','eq_members?on_conflict=email',{email,role:d.get('role'),active:true},{headers:{Prefer:'resolution=merge-duplicates,return=representation'}});toast('อัปเดตสิทธิ์แล้ว');e.target.reset();}catch(err){toast(err.message,true);}};}
-// One delegated handler; kept outside redraw so dynamically created buttons still work.
-document.addEventListener('click',e=>{const t=e.target.closest('[data-goto]');if(t){S.view=t.dataset.goto;renderShell();}});
-async function init(){if(location.hash.includes('access_token=')){const raw=new URLSearchParams(location.hash.slice(1));const access_token=raw.get('access_token'),refresh_token=raw.get('refresh_token');if(access_token&&refresh_token){saveSession({access_token,refresh_token,expires_in:Number(raw.get('expires_in')||3600)});history.replaceState({},'',location.pathname+location.search);}}loadSession();if(S.token)await startApp();else loginScreen();}
-init().catch(e=>{loginScreen();toast(e.message,true)});
+/* CNMI Blood Component QC v5.3.58 — Date validation, Post-Storage age and weekly evidence review */
+(() => {
+  'use strict';
+  const C = window.APP_CONFIG || {};
+  const SPB = window.STAFF_PLANNER_BRIDGE_CONFIG || {};
+  const $ = (s,root=document)=>root.querySelector(s);
+  const $$ = (s,root=document)=>[...root.querySelectorAll(s)];
+  const esc = v => String(v ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const num = v => (v===null||v===undefined||v===''||Number.isNaN(Number(v))) ? null : Number(v);
+  const fmt = (v,d=2)=> v===null||v===undefined||v==='' ? '–' : Number(v).toLocaleString('th-TH',{minimumFractionDigits:d,maximumFractionDigits:d});
+  const roleTH = r => ({staff:'Staff',reviewer:'Reviewer (แพทย์)',admin:'Admin'})[r] || r || '-';
+  const statusTH = s => ({draft:'ร่าง/กำลังบันทึก',submitted:'รอตรวจทวน',locked:'LOCK แล้ว'})[s] || s;
+  const profileName = id => { const p=state.profiles.find(x=>x.id===id); return p?.display_name || p?.email || (id?'ไม่ทราบผู้ใช้':'–'); };
+  const qcTH = s => ({not_qc:'ไม่ใช่รายการ QC',incomplete:'ข้อมูล QC ยังไม่ครบ',pass:'ผ่านเกณฑ์ QC',review:'ต้องตรวจสอบ QC'})[s] || s;
+  const purposeTH = p => p==='qc' ? 'ใช้เป็น QC' : 'Prepare ตามปกติ';
+  const purposeBadge = p => `<span class="badge ${p==='qc'?'qc-purpose':'prepare-purpose'}">${esc(purposeTH(p))}</span>`;
+  const poolReleaseTH = s => ({not_applicable:'–',pending_pool:'รอข้อมูล Pool PYI',standard:'ผ่านเกณฑ์ Pool PYI',conditional_pending:'Pool แบบมีเงื่อนไข · รอผล Yield',conditional_pass:'ผ่านสำหรับฉลากปกติ',conditional_fail:'ไม่ผ่านเงื่อนไขฉลากปกติ',below_min:'Pool PYI ต่ำกว่าเกณฑ์อนุโลม'})[s] || s || '–';
+  const poolReleaseBadge = s => {
+    if(!s || s==='not_applicable') return '<span class="muted">–</span>';
+    const cls=({standard:'pool-standard',conditional_pass:'pool-standard',conditional_pending:'pool-conditional',conditional_fail:'pool-fail',below_min:'pool-fail',pending_pool:'pool-pending'})[s]||'pool-pending';
+    return `<span class="badge ${cls}">${esc(poolReleaseTH(s))}</span>`;
+  };
+  const measuredTH = iso => iso ? dateTH(iso) : 'ยังไม่บันทึก';
+  const state = { sb:null, staffPlannerSb:null, staffPlannerOwnersByMonth:{}, staffPlannerBridgeStatus:'idle', staffPlannerBridgeError:'', session:null, user:null, profile:null, settings:null, productSettings:[], records:[], plateletWeeklyEvents:[], plateletWeeklyEvidence:[], plateletWeeklyReady:false, plateletDashboardMonth:'', plasmaSettings:null, plasmaProductSettings:[], plasmaRecords:[], plasmaBatches:[], plasmaReady:false, plasmaDashboardMonth:'', rbcSettings:null, rbcProductSettings:[], rbcRecords:[], rbcMonthlyProduction:[], rbcReady:false, profiles:[], nonconformances:[], deletedNonconformances:[], ncTombstones:[], nonconformanceEvidence:[], nonconformanceReady:false, currentNonconformanceId:null, ncModuleFilter:'', ncStatusFilter:'', ncWizardStepById:{}, currentRecordId:null, currentEvidence:[], currentPool:[], currentPlasmaRecordId:null, currentPlasmaEvidence:[], currentPlasmaBatchId:null, currentRbcRecordId:null, currentRbcEvidence:[], rbcDashboardMonth:'', lastLoginPassword:null, uiMode:'staff', auditUserFilter:'', resetTargetId:null, showDeletedRecords:false, showDeletedPlasma:false, showDeletedRbc:false, currentView:'home', currentModule:null, currentPage:null, sessionRetryTimer:null, sidebarCollapsed:localStorage.getItem('bloodqc_sidebar_collapsed')==='1', openNavGroup:null, plasmaBatchPage:1 };
+  const productSetting = type => state.productSettings.find(x=>x.product_type===type);
+  const activeProducts = () => state.productSettings.filter(x=>x.is_active).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)||a.product_type.localeCompare(b.product_type));
+  const productOptions = selected => activeProducts().map(x=>`<option value="${esc(x.product_type)}" ${selected===x.product_type?'selected':''}>${esc(x.product_type)}</option>`).join('');
+  const ROUTES = {
+    home:'#/', backlog:'#/backlog',
+    platelet:{dashboard:'#/platelet',record:'#/platelet/new',records:'#/platelet/records',guide:'#/platelet/guide',split:'#/platelet/split',settings:'#/platelet/qc_settings'},
+    rbc:{dashboard:'#/rbc',record:'#/rbc/new',records:'#/rbc/records',guide:'#/rbc/guide',settings:'#/rbc/qc_settings'},
+    plasma:{dashboard:'#/plasma',record:'#/plasma/new',records:'#/plasma/records',guide:'#/plasma/guide',settings:'#/plasma/qc_settings'},
+    review:'#/review',
+    nonconformance:'#/nonconformance',
+    users:'#/admin/users',
+    audit:'#/admin/audit'
+  };
+  function isStandaloneApp(){
+    return window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone === true;
+  }
+  function normalizeStandaloneLaunch(){
+    // iOS Add to Home Screen can remember the exact page used during installation.
+    // When the app is launched/reloaded as a standalone app, always begin at the Blood QC home.
+    if(isStandaloneApp() && cleanHash()!==ROUTES.home){
+      history.replaceState(null,'',location.pathname+location.search+ROUTES.home);
+    }
+  }
+
+  const MODULE_META = {
+    platelet:{label:'Platelet',title:'Platelet Preparation & QC',active:true},
+    rbc:{label:'RBC',title:'RBC Preparation & QC',active:true},
+    plasma:{label:'Plasma',title:'Plasma Preparation & QC',active:true}
+  };
+  function routeForView(v){
+    const m={home:ROUTES.home,backlog:ROUTES.backlog,dashboard:ROUTES.platelet.dashboard,record:ROUTES.platelet.record,records:ROUTES.platelet.records,guide:ROUTES.platelet.guide,settings:ROUTES.platelet.settings,review:ROUTES.review,nonconformance:ROUTES.nonconformance,users:ROUTES.users,audit:ROUTES.audit};
+    return m[v] || ROUTES.home;
+  }
+  function cleanHash(){ return (location.hash||'').replace(/\/+$/,'') || '#/'; }
+  function parseRoute(){
+    let h=cleanHash();
+    const legacy={'#/platelet/admin':ROUTES.platelet.settings,'#/platelet/audit':ROUTES.audit};
+    if(legacy[h]){ history.replaceState(null,'',location.pathname+location.search+legacy[h]); h=legacy[h]; }
+    if(h==='#/' || h==='#') return {view:'home',module:null,page:'home',hash:ROUTES.home};
+    if(h===ROUTES.backlog) return {view:'backlog',module:null,page:'backlog',hash:h};
+    if(h===ROUTES.review) return {view:'review',module:null,page:'review',hash:h,reviewerOnly:true};
+    if(h===ROUTES.nonconformance) return {view:'nonconformance',module:null,page:'nonconformance',hash:h};
+    if(h===ROUTES.users) return {view:'users',module:null,page:'users',hash:h,adminOnly:true};
+    if(h===ROUTES.audit) return {view:'audit',module:null,page:'audit',hash:h,adminOnly:true};
+    for(const [module,routes] of Object.entries({platelet:ROUTES.platelet,rbc:ROUTES.rbc,plasma:ROUTES.plasma})){
+      for(const [page,hash] of Object.entries(routes)){
+        if(h===hash){
+          if(module==='platelet'){
+            const viewMap={dashboard:'dashboard',record:'record',records:'records',guide:'guide',split:'module',settings:'settings'};
+            return {view:viewMap[page]||'dashboard',module,page,hash,adminOnly:page==='settings'};
+          }
+          return {view:'module',module,page,hash,adminOnly:page==='settings'};
+        }
+      }
+    }
+    return {view:'home',module:null,page:'home',hash:ROUTES.home,unknown:true};
+  }
+  function normalizeAppRoute(){
+    const r=parseRoute();
+    if(r.unknown) history.replaceState(null,'',location.pathname+location.search+ROUTES.home);
+    return parseRoute();
+  }
+  function updateRouteChrome(route){
+    const sub=$('#brandSubtitle');
+    const footer=$('#appFooter');
+    if(route.module){
+      const meta=MODULE_META[route.module];
+      if(sub) sub.textContent=`${meta.title} · CNMI Blood Bank`;
+      if(footer) footer.textContent=`CNMI Blood Component QC · ${meta.label} · v5.3.58 · bloodqc.cnmiblood.com${route.hash}`;
+    }else{
+      if(sub) sub.textContent='Blood Component Preparation & QC · CNMI Blood Bank';
+      if(footer) footer.textContent='CNMI Blood Component QC · v5.3.58 · bloodqc.cnmiblood.com';
+    }
+    document.title='Blood QC';
+    $$('#mainTabs button[data-route]').forEach(b=>b.classList.remove('active'));
+    const exact=$(`#mainTabs button[data-route="${route.hash}"]`);
+    if(exact) exact.classList.add('active');
+    else if(route.module){ $(`#${route.module}Tab`)?.classList.add('active'); }
+    syncNavGroupToRoute(route);
+  }
+
+  function showToast(msg,type='') { const t=$('#toast'); t.textContent=msg; t.className=`toast show ${type}`; clearTimeout(showToast._t); showToast._t=setTimeout(()=>t.className='toast',3500); }
+  function errText(e){ return e?.message || String(e || 'เกิดข้อผิดพลาด'); }
+  function bangkokISO(inputValue){ return inputValue ? new Date(inputValue+':00+07:00').toISOString() : null; }
+  function qcDateNormalize(v){return typeof v==='string'?v.replace(/^(25\d{2})(-\d{2}-\d{2})/,(_,y,tail)=>String(Number(y)-543)+tail):v;}
+  function qcNormalizeRow(r){return Object.fromEntries(Object.entries(r).map(([k,v])=>[k,/(?:_on|_at|_date)$/.test(k)?qcDateNormalize(v):v]));}
+  function qcDateGuard(){
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    for(const el of document.querySelectorAll('input[type=date],input[type=datetime-local]')){
+      if(el.disabled||el.readOnly||!el.getClientRects().length)continue;
+      if(el.validity.badInput||(el.value&&(!/^20\d{2}-/.test(el.value)||(!/expir/i.test(el.id)&&el.value.slice(0,10)>today)))){showToast('ตรวจสอบวันที่ '+(el.closest('.field')?.querySelector('label')?.textContent||'')+' ให้เลือกจากปฏิทิน ปี ค.ศ. และไม่ใช่วันอนาคต','error');el.focus();return false;}
+    }return true;
+  }
+  document.addEventListener('focusin',e=>{const el=e.target;if(!el.matches('input[type=date],input[type=datetime-local]')||el.disabled||el.readOnly)return;el.min=el.type==='date'?'2000-01-01':'2000-01-01T00:00';});
+  document.addEventListener('click',e=>{const el=e.target;if(el.matches('input[type=date]')&&!el.disabled&&!el.readOnly){try{el.showPicker?.();}catch{}}});
+  function inputFromISO(iso){ if(!iso) return ''; const d=new Date(iso); const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(d); const m=Object.fromEntries(parts.map(x=>[x.type,x.value])); return `${m.year}-${m.month}-${m.day}T${m.hour}:${m.minute}`; }
+  function dateTH(iso,withTime=true){ if(!iso) return '–'; return new Intl.DateTimeFormat('th-TH',{timeZone:'Asia/Bangkok',dateStyle:'medium',...(withTime?{timeStyle:'short'}:{})}).format(new Date(iso)); }
+  function dateTHLong(iso){ if(!iso)return '–'; return new Intl.DateTimeFormat('th-TH',{timeZone:'Asia/Bangkok',day:'numeric',month:'long',year:'numeric'}).format(new Date(iso)); }
+  function sameBangkokDate(a,b){ return a&&b && inputFromISO(a).slice(0,10)===inputFromISO(b).slice(0,10); }
+  function firstOfMonthISO(){ const now=new Date(); return new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1)).toISOString(); }
+  function cfgReady(){ return C.SUPABASE_URL && C.SUPABASE_KEY && !C.SUPABASE_URL.includes('PASTE_') && !C.SUPABASE_KEY.includes('PASTE_'); }
+  function staffPlannerBridgeConfigured(){
+    const url=String(SPB.SUPABASE_URL||'').trim(),key=String(SPB.SUPABASE_KEY||SPB.SUPABASE_ANON_KEY||'').trim();
+    return !!(window.supabase&&url&&key&&!url.includes('PASTE_')&&!key.includes('PASTE_'));
+  }
+  function ensureStaffPlannerBridgeClient(){
+    if(state.staffPlannerSb)return state.staffPlannerSb;
+    if(!staffPlannerBridgeConfigured()){state.staffPlannerBridgeStatus='unconfigured';return null;}
+    const key=SPB.SUPABASE_KEY||SPB.SUPABASE_ANON_KEY;
+    state.staffPlannerSb=window.supabase.createClient(SPB.SUPABASE_URL,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+    return state.staffPlannerSb;
+  }
+  async function loadStaffPlannerOwners(ym,force=false){
+    if(!/^\d{4}-\d{2}$/.test(String(ym||'')))return [];
+    if(!force&&Array.isArray(state.staffPlannerOwnersByMonth[ym]))return state.staffPlannerOwnersByMonth[ym];
+    const client=ensureStaffPlannerBridgeClient();
+    if(!client){state.staffPlannerOwnersByMonth[ym]=[];return [];}
+    state.staffPlannerBridgeStatus='loading';state.staffPlannerBridgeError='';
+    try{
+      const {data,error}=await client.rpc('bloodqc_weekly_position_assignments',{p_month:ym});
+      if(error)throw error;
+      const rows=(data||[]).map(x=>({month_key:String(x.month_key||ym),week_slot:Number(x.week_slot),position_code:String(x.position_code||''),staff_nickname:String(x.staff_nickname||'').trim(),assignment_days:Number(x.assignment_days||0),first_work_date:x.first_work_date||null,last_work_date:x.last_work_date||null}));
+      state.staffPlannerOwnersByMonth[ym]=rows;state.staffPlannerBridgeStatus='ready';return rows;
+    }catch(e){
+      console.warn('Staff Planner bridge unavailable',e);state.staffPlannerBridgeStatus='error';state.staffPlannerBridgeError=errText(e);delete state.staffPlannerOwnersByMonth[ym];return [];
+    }
+  }
+  function qcOwnerPosition(module,productType=''){
+    const type=String(productType||'');
+    if(module==='rbc'&&/post[-\s]?storage/i.test(type))return 'BB-Report';
+    // LDPPC pool work belongs to BB-Manual 4; SDP, FFP and routine RBC stay on BB-Manual 3.
+    if(module==='platelet'&&/^LDPPC(?:\s|$)/i.test(type))return 'BB-Manual 4';
+    return 'BB-Manual 3';
+  }
+  function plannerPositionKey(v){return String(v||'').normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g,'');}
+  function plannedOwnerRow(ym,slot,module,productType=''){
+    const pos=qcOwnerPosition(module,productType),rows=state.staffPlannerOwnersByMonth[ym]||[];
+    return rows.find(x=>Number(x.week_slot)===Number(slot)&&plannerPositionKey(x.position_code)===plannerPositionKey(pos))||null;
+  }
+  function plannedOwnerText(ym,slot,module,productType=''){
+    const pos=qcOwnerPosition(module,productType),row=plannedOwnerRow(ym,slot,module,productType);
+    if(row?.staff_nickname)return `ผู้รับผิดชอบ: ${row.staff_nickname} · ${pos}`;
+    if(state.staffPlannerBridgeStatus==='unconfigured')return `ตำแหน่งผู้รับผิดชอบ: ${pos} · ยังไม่ได้ตั้งค่าการเชื่อม Staff Planner`;
+    if(state.staffPlannerBridgeStatus==='error')return `ตำแหน่งผู้รับผิดชอบ: ${pos} · เชื่อม Staff Planner ไม่สำเร็จ`;
+    const available=[...new Set((state.staffPlannerOwnersByMonth[ym]||[]).filter(x=>x.week_slot===Number(slot)).map(x=>x.position_code))];return `ตำแหน่งผู้รับผิดชอบ: ${pos} · ยังไม่พบผู้รับผิดชอบ${available.length?' (รหัสที่ได้รับ: '+available.join(', ')+')':''}`;
+  }
+  function plannedOwnerSummaryHtml(ym,module,productType=''){
+    const pos=qcOwnerPosition(module,productType),rows=[1,2,3,4].map(slot=>({slot,row:plannedOwnerRow(ym,slot,module,productType)}));
+    return `<div class="planner-owner-summary"><div class="planner-owner-summary-head"><div><strong>ผู้รับผิดชอบ QC ตาม Staff Planner</strong><small>ตำแหน่ง ${esc(pos)} · รอบสัปดาห์เริ่มวันจันทร์แรกของเดือน · ดึงชื่ออัตโนมัติ</small></div><span class="planner-bridge-badge ${state.staffPlannerBridgeStatus==='ready'?'ready':'muted'}">${state.staffPlannerBridgeStatus==='ready'?'เชื่อมแล้ว':'Read-only'}</span></div><div class="planner-owner-week-grid">${rows.map(x=>`<div class="planner-owner-week"><span>${esc(plateletWeekLabel(ym,x.slot))}</span><strong>${esc(x.row?.staff_nickname||'–')}</strong></div>`).join('')}</div></div>`;
+  }
+  async function refreshPlannerOwnerHint(hostId,dateStr,module,productType=''){
+    const host=$('#'+hostId);if(!host)return;
+    const d=String(dateStr||'').slice(0,10),ym=d.slice(0,7),slot=module==='platelet'?plateletTrackingWeekSlot(d):plateletWeekSlot(d),pos=qcOwnerPosition(module,productType);
+    if(!d||!slot){host.innerHTML=`<span>ผู้รับผิดชอบตาม Staff Planner</span><strong>เลือกวันที่ก่อน</strong><small>ตำแหน่ง ${esc(pos)}</small>`;return;}
+    host.innerHTML=`<span>ผู้รับผิดชอบตาม Staff Planner</span><strong>กำลังตรวจสอบ...</strong><small>ตำแหน่ง ${esc(pos)}</small>`;
+    await loadStaffPlannerOwners(ym);
+    const row=plannedOwnerRow(ym,slot,module,productType);
+    host.innerHTML=`<span>ผู้รับผิดชอบตาม Staff Planner · ${esc(module==='platelet'?plateletTrackingWeekLabel(ym,slot):plateletWeekLabel(ym,slot))}</span><strong>${esc(row?.staff_nickname||'ยังไม่พบชื่อ')}</strong><small>${esc(pos)}${row?.assignment_days?` · ถูกจัด ${row.assignment_days} วันในสัปดาห์นี้`:''}</small>`;
+  }
+  async function logActivity(action,entityType='system',recordId=null,detail={}){
+    if(!state.sb||!state.user||!state.profile||state.profile.must_change_password) return;
+    const payload={app_version:'5.3.56',module:state.currentModule||'core',ui_mode:state.uiMode,...detail};
+    const {error}=await state.sb.rpc('log_activity',{p_action:action,p_entity_type:entityType,p_record_id:recordId,p_detail:payload});
+    if(error) console.warn('activity log failed',error);
+  }
+  async function invokeAdminUsers(body){
+    const {data,error}=await state.sb.functions.invoke('admin-users',{body});
+    if(error){
+      let msg=error.message||'เรียก Admin function ไม่สำเร็จ';
+      try{ if(error.context){ const j=await error.context.clone().json(); if(j?.error) msg=j.error; } }catch(_e){}
+      throw new Error(msg);
+    }
+    if(data?.error) throw new Error(data.error);
+    return data;
+  }
+  function actionTH(a){
+    const m={login:'เข้าสู่ระบบ',logout:'ออกจากระบบ',ui_mode_change:'สลับโหมด',view_record:'เปิดดูรายการ',export_csv:'Export CSV',create_user:'สร้างบัญชีผู้ใช้',reset_password:'Reset password',update_profile:'แก้ข้อมูล/สิทธิ์ผู้ใช้',update_qc_settings:'แก้เกณฑ์การเตรียม/QC',update_product_settings:'แก้น้ำหนักถุง/Density',password_changed:'เปลี่ยนรหัสผ่าน',create:'สร้างรายการ',update:'แก้ไขรายการ',close:'ปิดเคส',admin_edit:'Admin แก้ไขรายการ',admin_delete:'Admin ลบรายการ',admin_restore:'Admin กู้คืนรายการ',insert:'เพิ่มข้อมูล',delete:'ลบข้อมูล',create_outlab_batch:'สร้างชุดนำส่ง Factor VIII',update_outlab_batch:'แก้ชุดนำส่ง Factor VIII',delete_outlab_batch:'ยกเลิกชุดนำส่ง Factor VIII',export_pdf:'Export PDF'};
+    if(m[a]) return m[a];
+    if(a?.startsWith('status:draft→submitted')) return 'ส่งตรวจทวน';
+    if(a?.startsWith('status:submitted→locked')) return 'แพทย์ทบทวนและ LOCK';
+    if(a?.startsWith('status:submitted→draft')) return 'แพทย์ส่งกลับแก้ไข';
+    if(a?.startsWith('status:locked→draft')) return 'ปลดล็อก / Revision ใหม่';
+    return a||'-';
+  }
+  function doctorTestAvailable(){ return state.profile?.role==='admin' && state.profile?.can_review===true; }
+  function doctorTestMode(){ return doctorTestAvailable() && state.uiMode==='reviewer'; }
+  function effectiveRole(){
+    if(!state.profile) return 'staff';
+    if(state.profile.role==='admin'){
+      if(state.uiMode==='staff') return 'staff';
+      if(state.uiMode==='reviewer' && doctorTestAvailable()) return 'reviewer';
+      return 'admin';
+    }
+    return state.profile.role;
+  }
+  function reviewerUi(){ return effectiveRole()==='reviewer'; }
+  function staffWriteUi(){ return ['staff','admin'].includes(effectiveRole()); }
+  function adminUi(){ return effectiveRole()==='admin'; }
+  function activeView(){ return state.currentView || 'home'; }
+  function desktopSidebar(){ return window.matchMedia('(min-width:901px)').matches; }
+  function closeSidebar(){ $('#sideNav')?.classList.remove('open'); $('#sidebarBackdrop')?.classList.add('hidden'); $('#mobileMenuBtn')?.setAttribute('aria-expanded','false'); }
+  function openSidebar(){ $('#sideNav')?.classList.add('open'); $('#sidebarBackdrop')?.classList.remove('hidden'); $('#mobileMenuBtn')?.setAttribute('aria-expanded','true'); }
+  function applySidebarCollapsed(){
+    const collapsed=desktopSidebar() && state.sidebarCollapsed;
+    $('#appShell')?.classList.toggle('sidebar-collapsed',collapsed);
+    const topBtn=$('#mobileMenuBtn');
+    if(topBtn){ topBtn.setAttribute('aria-label',collapsed?'เปิดแถบเมนู':'ยุบแถบเมนู'); topBtn.title=collapsed?'เปิดแถบเมนู':'ยุบแถบเมนู'; }
+  }
+  function toggleDesktopSidebar(){
+    state.sidebarCollapsed=!state.sidebarCollapsed;
+    localStorage.setItem('bloodqc_sidebar_collapsed',state.sidebarCollapsed?'1':'0');
+    applySidebarCollapsed();
+  }
+  function setOpenNavGroup(group,force=null){
+    const current=state.openNavGroup;
+    state.openNavGroup=force===null ? (current===group?null:group) : (force?group:null);
+    $$('.nav-module-group[data-nav-group]').forEach(el=>{
+      const expanded=el.dataset.navGroup===state.openNavGroup;
+      el.classList.toggle('expanded',expanded);
+      el.querySelector('.nav-submenu')?.classList.toggle('nav-submenu-open',expanded);
+      el.querySelector('.nav-group-head')?.setAttribute('aria-expanded',expanded?'true':'false');
+    });
+  }
+  function syncNavGroupToRoute(route){
+    let group=null;
+    if(route.module) group=route.module;
+    else if(['users','audit'].includes(route.view)) group='admin';
+    if(group!==state.openNavGroup) setOpenNavGroup(group,true);
+    $$('.nav-module-group').forEach(el=>el.classList.toggle('current-group',el.dataset.navGroup===group));
+  }
+  function applyUiMode(render=true){
+    if(!state.profile) return;
+    const isAdmin=state.profile.role==='admin';
+    if(!isAdmin) state.uiMode=state.profile.role;
+    $('#settingsTab')?.classList.toggle('hidden',!adminUi());
+    $('#plasmaSettingsTab')?.classList.toggle('hidden',!adminUi());
+    $('#rbcSettingsTab')?.classList.toggle('hidden',!adminUi());
+    $('#reviewTab')?.classList.toggle('hidden',!reviewerUi());
+    $('#reviewNavLabel')?.classList.toggle('hidden',!reviewerUi());
+    $('#plateletNewTab')?.classList.toggle('hidden',!staffWriteUi());
+    $('#plasmaNewTab')?.classList.toggle('hidden',!staffWriteUi());
+    $('#rbcNewTab')?.classList.toggle('hidden',!staffWriteUi());
+    const reviewCount=pendingReviewRecords().length; if($('#reviewCount')) $('#reviewCount').textContent=reviewCount?String(reviewCount):''; updateNcNavBadge();
+    $('#usersTab')?.classList.toggle('hidden',!adminUi());
+    $('#auditTab')?.classList.toggle('hidden',!adminUi());
+    $('#adminNavLabel')?.classList.toggle('hidden',!adminUi());
+    $('#adminModePanel')?.classList.toggle('hidden',!isAdmin);
+    $('#regularUserCard')?.classList.toggle('hidden',isAdmin);
+    $('#doctorModeOption')?.classList.toggle('hidden',!doctorTestAvailable());
+    const label=adminUi()?'Admin mode':doctorTestMode()?'แพทย์ mode · ทดสอบ':'Staff mode';
+    const badge=$('#currentModeBadge'); if(badge){ badge.textContent=isAdmin?label:roleTH(state.profile.role); badge.classList.toggle('admin',adminUi()); badge.classList.toggle('reviewer',doctorTestMode()); }
+    const btnLabel=$('#modeButtonLabel'); if(btnLabel) btnLabel.textContent=label;
+    $('#modeDot')?.classList.toggle('admin',adminUi());
+    $('#modeDot')?.classList.toggle('reviewer',doctorTestMode());
+    if($('#headerUser')) $('#headerUser').textContent=state.profile.display_name || state.profile.email.split('@')[0];
+    if($('#headerRole')) $('#headerRole').textContent=doctorTestMode()?'Reviewer (แพทย์) · โหมดทดสอบ':roleTH(state.profile.role);
+    if($('#regularUserName')) $('#regularUserName').textContent=state.profile.display_name || state.profile.email.split('@')[0];
+    if($('#regularUserRole')) $('#regularUserRole').textContent=roleTH(state.profile.role);
+    if(!adminUi() && ['settings','users','audit'].includes(activeView())){ const r=parseRoute(); location.hash=r.module?ROUTES[r.module].dashboard:ROUTES.home; return; }
+    if(!reviewerUi() && activeView()==='review'){ location.hash=ROUTES.home; return; }
+    if(render){
+      const v=activeView();
+      if(v==='home') renderHome();
+      else if(v==='backlog') renderBacklog(true); else if(v==='dashboard') renderDashboard(); else if(v==='records') renderRecordsList(); else if(v==='record') renderRecordForm(); else if(v==='review'&&reviewerUi()) renderReviewQueue(); else if(v==='nonconformance') renderNonconformancePage(); else if(v==='settings'&&adminUi()) renderSettings(); else if(v==='users'&&adminUi()) renderUsers(); else if(v==='audit'&&adminUi()) renderAuditLog(); else if(v==='module') renderModulePlaceholder(state.currentModule,state.currentPage);
+    }
+  }
+  function setUiMode(mode){
+    if(state.profile?.role!=='admin') return;
+    if(mode==='reviewer' && !doctorTestAvailable()) return;
+    state.uiMode=mode==='admin'?'admin':mode==='reviewer'?'reviewer':'staff';
+    localStorage.setItem('bloodqc_ui_mode',state.uiMode);
+    $('#modeMenu')?.classList.add('hidden'); $('#modeMenuBtn')?.setAttribute('aria-expanded','false');
+    applyUiMode(true); logActivity('ui_mode_change','session',null,{mode:state.uiMode}).catch(()=>{});
+    showToast(state.uiMode==='admin'?'เปิดโหมดผู้ดูแลระบบแล้ว':state.uiMode==='reviewer'?'เปิดโหมดแพทย์ทดสอบแล้ว':'กลับสู่โหมดผู้ใช้งานทั่วไปแล้ว','good');
+  }
+
+  let enterAppPromise=null;
+  function clearSessionRetry(){
+    if(state.sessionRetryTimer){ clearTimeout(state.sessionRetryTimer); state.sessionRetryTimer=null; }
+  }
+  function hideAuthScreens(){
+    $('#setupScreen').classList.add('hidden');
+    $('#resumeScreen')?.classList.add('hidden');
+    $('#loginScreen').classList.add('hidden');
+    $('#forcePasswordScreen').classList.add('hidden');
+    $('#appShell').classList.add('hidden');
+  }
+  function showResume(message='กำลังตรวจสอบการเข้าสู่ระบบ...',allowActions=false){
+    hideAuthScreens();
+    $('#resumeScreen')?.classList.remove('hidden');
+    if($('#resumeMessage')) $('#resumeMessage').textContent=message;
+    $('#resumeActions')?.classList.toggle('hidden',!allowActions);
+  }
+  function showLogin(){
+    clearSessionRetry();
+    hideAuthScreens();
+    $('#loginScreen').classList.remove('hidden');
+    $('#loginPassword').value='';
+    $('#loginMessage').textContent='';
+  }
+  function scheduleSessionRetry(delay=4000){
+    clearSessionRetry();
+    state.sessionRetryTimer=setTimeout(()=>restoreCurrentSession(true),delay);
+  }
+  async function restoreCurrentSession(fromRetry=false){
+    if(!state.sb) return;
+    showResume(fromRetry?'กำลังเชื่อมต่อใหม่ โดยยังคงสถานะการเข้าสู่ระบบไว้...':'กำลังเปิด Blood QC...');
+    try{
+      const {data,error}=await state.sb.auth.getSession();
+      if(error) throw error;
+      const session=data?.session||null;
+      if(session){
+        state.session=session; state.user=session.user;
+        await enterApp(session);
+      }else{
+        state.session=null; state.user=null; state.profile=null;
+        showLogin();
+      }
+    }catch(e){
+      console.warn('session restore failed',e);
+      showResume('ยังเชื่อมต่อระบบไม่ได้ แต่ระบบยังเก็บการเข้าสู่ระบบไว้ จะลองใหม่อัตโนมัติ',true);
+      scheduleSessionRetry();
+    }
+  }
+  async function init(){
+    normalizeStandaloneLaunch();
+    if(!cfgReady() || !window.supabase){ $('#setupScreen').classList.remove('hidden'); return; }
+    showResume('กำลังตรวจสอบการเข้าสู่ระบบ...');
+    state.sb=window.supabase.createClient(C.SUPABASE_URL,C.SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,storage:window.localStorage}});
+    state.sb.auth.onAuthStateChange((event,session)=>{
+      setTimeout(async()=>{
+        try{
+          if(event==='PASSWORD_RECOVERY' && session){
+            clearSessionRetry(); state.session=session; state.user=session.user;
+            await showForcedPassword(true);
+            return;
+          }
+          if(event==='SIGNED_OUT' || !session){
+            clearSessionRetry(); state.session=null;state.user=null;state.profile=null;showLogin(); return;
+          }
+          state.session=session; state.user=session.user;
+          if(event==='TOKEN_REFRESHED') return;
+          if(!state.profile) await enterApp(session);
+        }catch(e){console.error(e);showToast(errText(e),'error');}
+      },0);
+    });
+    await restoreCurrentSession(false);
+  }
+
+  async function loadOwnProfile(){
+    const {data:p,error}=await state.sb.from('profiles').select('*').eq('id',state.user.id).maybeSingle();
+    if(error) throw error;
+    return p;
+  }
+
+  async function enterApp(session){
+    if(enterAppPromise) return enterAppPromise;
+    enterAppPromise=(async()=>{
+      clearSessionRetry();
+      state.session=session; state.user=session.user;
+      if(!state.user.email?.toLowerCase().endsWith('@mahidol.ac.th')){ await state.sb.auth.signOut(); showToast('บัญชีนี้ไม่ใช่ @mahidol.ac.th','error'); return; }
+      let p;
+      try{
+        p=await loadOwnProfile();
+      }catch(e){
+        // A temporary network/Supabase error must not erase a valid saved session.
+        console.warn('profile restore failed; keeping session',e);
+        state.profile=null;
+        showResume('เชื่อมต่อข้อมูลผู้ใช้งานไม่สำเร็จ แต่ยังคงสถานะการเข้าสู่ระบบไว้ จะลองใหม่อัตโนมัติ',true);
+        scheduleSessionRetry();
+        return;
+      }
+      if(!p){ await state.sb.auth.signOut(); showToast('บัญชียังไม่ได้รับสิทธิ์ในระบบ หรือยังไม่มี Profile','error'); return; }
+      if(!p.is_active){ await state.sb.auth.signOut(); showToast('บัญชีนี้ถูกปิดการใช้งาน','error'); return; }
+      state.profile=p;
+      if(p.must_change_password){ await showForcedPassword(false); return; }
+      await openAppShell();
+    })();
+    try{return await enterAppPromise;} finally{enterAppPromise=null;}
+  }
+
+  async function openAppShell(){
+    hideAuthScreens();
+    $('#appShell').classList.remove('hidden');
+    applySidebarCollapsed();
+    const p=state.profile;
+    const savedMode=localStorage.getItem('bloodqc_ui_mode')||localStorage.getItem('platelet_ui_mode')||'staff';
+    state.uiMode=p.role==='admin' ? (savedMode==='reviewer'&&p.can_review===true?'reviewer':savedMode==='admin'?'admin':'staff') : p.role;
+    await loadSettings(); await loadProductSettings(); await loadProfiles(); await loadRecords(); await loadPlateletWeeklyData(); await loadPlasmaModuleData(); await loadRbcModuleData(); await loadNonconformanceData();
+    loadStaffPlannerOwners(plateletMonthKey()).catch(()=>{});
+    applyUiMode(false);
+    const loginKey=`bloodqc_login_${state.user.id}_${String(state.session?.access_token||'').slice(-16)}`;
+    if(!sessionStorage.getItem(loginKey)){
+      await logActivity('login','session',null,{platform:navigator.platform||'',standalone:window.matchMedia?.('(display-mode: standalone)')?.matches||false});
+      sessionStorage.setItem(loginKey,'1');
+      await loadProfiles();
+    }
+    const route=normalizeAppRoute();
+    switchView(route.view,true,route);
+  }
+
+  async function showForcedPassword(recoveryMode=false){
+    if(state.user && !state.profile){
+      try{state.profile=await loadOwnProfile();}catch(_e){}
+    }
+    hideAuthScreens();
+    $('#forcePasswordScreen').classList.remove('hidden');
+    $('#forcePasswordTitle').textContent=recoveryMode?'ตั้งรหัสผ่านใหม่':'เปลี่ยนรหัสผ่านครั้งแรก';
+    $('#forcePasswordText').textContent=recoveryMode?'กำหนดรหัสผ่านใหม่สำหรับบัญชีนี้':'กรุณาเปลี่ยนรหัสผ่านตั้งต้นที่ Admin กำหนดให้ ก่อนเข้าใช้งานระบบ';
+    $('#forcePasswordMessage').textContent='รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร';
+    $('#forcePasswordForm').dataset.recovery=recoveryMode?'1':'0';
+    $('#forceNewPassword').value=''; $('#forceConfirmPassword').value='';
+    setTimeout(()=>$('#forceNewPassword').focus(),50);
+  }
+
+  async function loadSettings(){ const {data,error}=await state.sb.from('qc_settings').select('*').eq('id',1).single(); if(error) throw error; state.settings=data; }
+  async function loadProductSettings(){ const {data,error}=await state.sb.from('platelet_product_settings').select('*').order('sort_order').order('product_type'); if(error) throw error; state.productSettings=data||[]; }
+  async function qcAllRows(table,liveOnly=false){
+    const rows=[]; let cursor=null;
+    while(true){let q=state.sb.from(table).select('*').order('id').limit(500);if(liveOnly)q=q.is('deleted_at',null);if(cursor!==null)q=q.gt('id',cursor);const {data,error}=await q;if(error)return {data:null,error};if(!data?.length)break;rows.push(...data);const next=data[data.length-1].id;if(next==null||next===cursor)return {data:null,error:new Error('Pagination cursor invalid: '+table)};cursor=next;}
+    return {data:rows,error:null};
+  }
+  async function loadRecords(){
+    const {data,error}=await qcAllRows('platelet_records');
+    if(error) throw error; state.records=(data||[]).map(qcNormalizeRow).sort((a,b)=>String(b.collection_at||'').localeCompare(String(a.collection_at||''))||String(b.created_at||'').localeCompare(String(a.created_at||''))); updateNcNavBadge();
+  }
+  async function loadPlateletWeeklyData(){
+    try{
+      const [evRes,fileRes]=await Promise.all([
+        qcAllRows('platelet_weekly_events',true),
+        qcAllRows('platelet_weekly_evidence_files')
+      ]);
+      if(evRes.error)throw evRes.error;if(fileRes.error)throw fileRes.error;
+      state.plateletWeeklyEvents=(evRes.data||[]).map(qcNormalizeRow);state.plateletWeeklyEvidence=fileRes.data||[];state.plateletWeeklyReady=true;
+    }catch(e){console.warn('Platelet weekly tracking not ready',e);state.plateletWeeklyEvents=[];state.plateletWeeklyEvidence=[];state.plateletWeeklyReady=false;}
+  }
+  async function reloadPlateletWeeklyData(){return loadPlateletWeeklyData();}
+  function monthKeyFromDateString(dateStr){return dateStr?String(dateStr).slice(0,7):'';}
+  function plateletMonthKey(d=new Date()){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit'}).format(d).replace('/','-');}
+  function plateletDateFromRecord(r){return r?.collection_at?inputFromISO(r.collection_at).slice(0,10):'';}
+  function plateletFirstMondayDay(ym){
+    const m=String(ym||'').match(/^(\d{4})-(\d{2})$/);if(!m)return null;
+    const y=Number(m[1]),mo=Number(m[2]);if(mo<1||mo>12)return null;
+    const dow=new Date(Date.UTC(y,mo-1,1)).getUTCDay();
+    return 1+((8-(dow===0?7:dow))%7);
+  }
+  function plateletWeekRange(ym,slot){
+    const m=String(ym||'').match(/^(\d{4})-(\d{2})$/),n=Number(slot);if(!m||n<1||n>4)return [null,null];
+    const y=Number(m[1]),mo=Number(m[2]),last=new Date(Date.UTC(y,mo,0)).getUTCDate(),firstMonday=plateletFirstMondayDay(ym);
+    const start=firstMonday+(n-1)*7,end=n===4?last:Math.min(last,start+6);
+    return [start,end];
+  }
+  function plateletWeekSlot(dateStr){
+    const raw=String(dateStr||'').slice(0,10),m=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return null;
+    const ym=`${m[1]}-${m[2]}`,day=Number(m[3]),firstMonday=plateletFirstMondayDay(ym);if(!day||!firstMonday||day<firstMonday)return null;
+    const slot=Math.floor((day-firstMonday)/7)+1;return Math.min(4,Math.max(1,slot));
+  }
+  function plateletWeekLabel(ym,slot){const [start,end]=plateletWeekRange(ym,slot);return start?`สัปดาห์ ${slot} · ${String(start).padStart(2,'0')}–${String(end).padStart(2,'0')}/${String(ym).slice(5,7)}`:`สัปดาห์ ${slot}`;}
+  // In Platelet, a product collected/pool-prepared before the FIRST MONDAY still
+  // belongs to the first QC sampling bucket of its calendar month. Staff Planner
+  // positions remain anchored on the first Monday; other modules are unchanged.
+  function plateletTrackingWeekSlot(dateStr){
+    const d=String(dateStr||'').slice(0,10),ym=monthKeyFromDateString(d);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)||!ym)return null;
+    const slot=plateletWeekSlot(d);
+    return slot || (Number(d.slice(8))<plateletFirstMondayDay(ym)?1:null);
+  }
+  function plateletTrackingWeekLabel(ym,slot){
+    if(slot===1){const first=plateletFirstMondayDay(ym);
+      if(first>1){const [,end]=plateletWeekRange(ym,1);return `สัปดาห์ 1 · 01–${String(end).padStart(2,'0')}/${ym.slice(5,7)}`;}
+    }
+    return plateletWeekLabel(ym,slot);
+  }
+  function plateletFirstRecordInSlot(ym,slot,productType='',excludeId=null){
+    return state.records.filter(r=>!r.deleted_at&&r.id!==excludeId&&(!productType||r.product_type===productType))
+      .filter(r=>{const d=plateletDateFromRecord(r);return monthKeyFromDateString(d)===ym&&plateletTrackingWeekSlot(d)===slot;})
+      .sort((a,b)=>String(a.collection_at||'').localeCompare(String(b.collection_at||'') )||String(a.product_no||'').localeCompare(String(b.product_no||'')))[0]||null;
+  }
+  function plateletPoolPreparationComplete(r){
+    if(!r||!/^LDPPC(?:\s|$)/i.test(String(r.product_type||'')))return true;
+    return ['standard','conditional_pass'].includes(r.pool_release_status);
+  }
+  function plateletMeasurementsComplete(r){
+    return !!(r&&r.platelet_yield!=null&&r.residual_wbc!=null&&r.ph_value!=null&&r.ph_measured_at&&plateletPoolPreparationComplete(r));
+  }
+  function plateletProgressLabel(r){
+    if(!r||r.deleted_at)return null;
+    if(r.status==='submitted')return 'รอแพทย์ทบทวน';
+    if(r.status==='locked')return 'ทบทวนเสร็จสิ้น';
+    if(r.record_purpose==='qc'){
+      if(plateletMeasurementsComplete(r))return plateletEffectiveQcStatus(r)==='review'?'ตรวจครบ · ต้องตรวจสอบ QC':'ตรวจครบ · พร้อมส่งแพทย์';
+      return 'เก็บตัวอย่าง QC · รอตรวจให้ครบ';
+    }
+    if(r.volume_ml==null||!plateletPoolPreparationComplete(r))return null;
+    if(plateletMeasurementsComplete(r))return plateletAnalyticReviewReasons(r).length?'ผลตรวจผิดเกณฑ์ · ต้องตรวจสอบ':'เสร็จสิ้นแล้ว';
+    if(r.ph_value==null)return 'Pool เสร็จ · รอผลตรวจ/pH';
+    return 'Pool เสร็จ · รอผลตรวจ';
+  }
+  function plateletProgressStatusBadge(r){
+    const label=plateletProgressLabel(r);
+    if(!label)return statusBadge(r.status);
+    const abnormal=plateletAnalyticReviewReasons(r).length>0;
+    const cls=abnormal?'review':r.status==='locked'||(r.record_purpose==='prepare'&&plateletMeasurementsComplete(r))?'pass':'draft';
+    return `<span class="badge ${cls}" title="สถานะการตรวจ/เตรียมผลิตภัณฑ์; สถานะฐานข้อมูล: ${esc(statusTH(r.status))}">${esc(label)}</span>`;
+  }
+
+  // v5.3.53: month quotas (four bags) and actual QC weeks are different dimensions.
+  // Never equate the third bag entered with the third week of the month.
+  function qcRecordTrackingDate(module,r){
+    if(module==='rbc')return rbcTrackingDate(r);
+    return String(r?.manufactured_on||'').slice(0,10);
+  }
+  function qcRecordsByProductionWeek(ym,rows,module='plasma'){
+    const weeks=[1,2,3,4].map(slot=>({slot,records:[]})),outside=[],missingDate=[];
+    for(const r of rows){
+      const date=qcRecordTrackingDate(module,r);
+      if(!date||(module==='rbc'&&!rbcEligible(r))){missingDate.push(r);continue;}
+      const slot=monthKeyFromDateString(date)===ym?plateletWeekSlot(date):null;
+      if(slot>=1&&slot<=4)weeks[slot-1].records.push(r);
+      else outside.push(r); // The first days before the first Monday are not a valid week slot.
+    }
+    return {weeks,outside,missingDate};
+  }
+  function monthlyQcWeeklyPopupHtml(ym,productType,rows,module){
+    const {weeks,outside,missingDate}=qcRecordsByProductionWeek(ym,rows,module);
+    const cssClass=module==='plasma'?'plasma-summary-open':'rbc-summary-open';
+    const describe=module==='plasma'
+      ? r=>plasmaOutlabState(r)
+      : r=>rbcRecordAnyMachineFail(r)?'ต้องตรวจสอบ QC · มีเครื่องไม่ผ่าน':rbcEffectiveQcStatus(r)==='pass'?'ผ่านเกณฑ์ที่มีข้อมูล':rbcEffectiveQcStatus(r)==='review'?'ต้องตรวจสอบ QC':'ข้อมูล QC ยังไม่ครบ';
+    const recordRow=r=>{
+      const useFilter=module==='rbc'&&rbcUsesFilterDate(r?.product_type);
+      const trackingDate=qcRecordTrackingDate(module,r);
+      const dateText=useFilter?(trackingDate?`กรอง ${trackingDate} · อายุ ${rbcAgeDays(r)??"ไม่ทราบ"} วัน`:'ยังไม่ระบุวันที่กรอง'):`ผลิต ${r.manufactured_on||'–'}`;
+      return `<div class="qc-week-record"><div><strong>${esc(r.product_no||'–')}</strong><small>${esc(dateText)} · ${esc(describe(r))}</small></div><button type="button" class="btn tiny-btn ${cssClass}" data-id="${esc(r.id)}">ดูรายการ</button></div>`;
+    };
+    const slots=weeks.map(({slot,records})=>{
+      const owner=plannedOwnerText(ym,slot,module,productType);
+      const label=plateletWeekLabel(ym,slot);
+      const exception=module==='rbc'&&rbcUsesFilterDate(productType)?plateletNoPoolInSlot(ym,slot,productType)[0]:null;
+      if(!records.length&&exception)return `<div class="platelet-week-popup-row no_pool"><div><strong>${esc(label)}</strong><small>${esc(owner)} · ${esc(exception.note||'ไม่มีผลิตภัณฑ์เหมาะสม')}</small><small>${exception.reviewed_at?'แพทย์รับทราบแล้ว':'รอแพทย์รับทราบ'} · ไม่นับ QC</small></div><button class="btn tiny-btn weekly-evidence-view" data-event-id="${esc(exception.id)}">ดูหลักฐาน</button></div>`;
+      if(!records.length)return `<div class="platelet-week-popup-row pending"><div><strong>${esc(label)}</strong><small>${esc(owner)} · ยังไม่มีรายการ QC ในสัปดาห์นี้</small></div><span class="badge incomplete">ยังไม่ได้เก็บ</span>${module==='rbc'&&rbcUsesFilterDate(productType)&&staffWriteUi()?`<button class="btn tiny-btn rbc-no-product" data-slot="${slot}">ไม่มีถุงเหมาะสม</button>`:''}</div>`;
+      return `<div class="platelet-week-popup-row qc qc-week-group"><div class="qc-week-group-content"><strong>${esc(label)}</strong><small>${esc(owner)} · ${records.length} ถุง</small><div class="qc-week-record-list">${records.map(recordRow).join('')}</div></div><span class="badge pass">${records.length} ถุง</span></div>`;
+    }).join('');
+    const dateWord=module==='rbc'&&rbcUsesFilterDate(productType)?'วันที่กรอง':'วันที่ผลิต';
+    const outsideHtml=outside.length?`<div class="product-popup-extra qc-outside-weeks"><strong>${esc(dateWord)}ก่อนสัปดาห์ที่ 1 หรือไม่อยู่ในรอบ 4 สัปดาห์ · ${outside.length} ถุง</strong><div class="qc-week-record-list">${outside.map(recordRow).join('')}</div></div>`:'';
+    const missingHtml=missingDate.length?`<div class="product-popup-extra qc-outside-weeks"><strong>ไม่นับ QC / รอตรวจสอบวันที่ · ${missingDate.length} ถุง</strong><p class="muted">Post-Storage ต้องมีวันที่เจาะเก็บและวันที่กรอง อายุ 0–7 วัน จึงนับ QC ตามแผน</p><div class="qc-week-record-list">${missingDate.map(recordRow).join('')}</div></div>`:'';
+    return {html:`<div class="platelet-week-popup-list">${slots}</div>${missingHtml}${outsideHtml}`,coveredWeeks:weeks.filter(w=>w.records.length).length,workWeeks:weeks.filter(w=>w.records.length||(module==='rbc'&&rbcUsesFilterDate(productType)&&plateletNoPoolInSlot(ym,w.slot,productType).some(e=>e.reviewed_at))).length,missingDateCount:missingDate.length};
+  }
+  function weeklyEventHasEvidence(eventId){return state.plateletWeeklyEvidence.some(x=>x.event_id===eventId);}
+  function activePlateletTrackingProducts(){return state.productSettings.filter(x=>x.is_active).sort((a,b)=>(a.sort_order??100)-(b.sort_order??100)||String(a.product_type).localeCompare(String(b.product_type)));}
+  function plateletQcInSlot(ym,slot,excludeId=null,productType=''){return state.records.filter(r=>!r.deleted_at&&r.id!==excludeId&&r.record_purpose==='qc'&&(!productType||r.product_type===productType)).filter(r=>{const d=plateletDateFromRecord(r);return monthKeyFromDateString(d)===ym&&plateletTrackingWeekSlot(d)===slot;});}
+  function plateletNoPoolInSlot(ym,slot,productType=''){return state.plateletWeeklyEvents.filter(e=>(!productType||e.product_type===productType)&&monthKeyFromDateString(e.event_date)===ym&&plateletTrackingWeekSlot(e.event_date)===slot&&weeklyEventHasEvidence(e.id));}
+  function plateletWeeklySummary(ym,productType){return [1,2,3,4].map(slot=>{const qc=plateletQcInSlot(ym,slot,null,productType),noPool=plateletNoPoolInSlot(ym,slot,productType),first=plateletFirstRecordInSlot(ym,slot,productType);return {slot,qc,noPool,first,complete:qc.length>0||noPool.some(e=>e.reviewed_at),resultsComplete:qc.some(plateletMeasurementsComplete),status:qc.length?'qc':noPool.length?'no_pool':'pending'};});}
+  async function loadProfiles(){ const {data,error}=await state.sb.from('profiles').select('*').order('display_name'); if(error) throw error; state.profiles=data||[]; }
+
+  async function loadNonconformanceData(){
+    try{
+      const [ncRes,evRes,tombRes]=await Promise.all([
+        state.sb.from('qc_nonconformances').select('*').order('created_at',{ascending:false}).limit(1000),
+        state.sb.from('qc_nonconformance_evidence').select('*').order('created_at',{ascending:false}).limit(2000),
+        state.sb.rpc('bloodqc_nc_deleted_source_keys')
+      ]);
+      if(ncRes.error)throw ncRes.error;if(evRes.error)throw evRes.error;
+      const allNc=ncRes.data||[];
+      state.nonconformances=allNc.filter(n=>!n.deleted_at);
+      state.deletedNonconformances=allNc.filter(n=>!!n.deleted_at);
+      // Deleted sources may be hidden by RLS or fall beyond the first 1,000 NC rows.
+      // A security-definer RPC returns only source keys, never sensitive NC content.
+      state.ncTombstones=tombRes.error?null:(tombRes.data||[]);
+      if(tombRes.error)console.warn('NC deleted-source RPC unavailable: run v5.3.47 SQL',tombRes.error);
+      state.nonconformanceEvidence=evRes.data||[];state.nonconformanceReady=true;
+    }catch(e){
+      console.warn('Nonconformance module not ready',e);
+      state.nonconformances=[];state.deletedNonconformances=[];state.ncTombstones=[];state.nonconformanceEvidence=[];state.nonconformanceReady=false;
+    }
+    updateNcNavBadge();
+  }
+  async function reloadNonconformanceData(){return loadNonconformanceData();}
+
+  async function loadPlasmaModuleData(){
+    try{
+      const [settingsRes,productsRes,recordsRes,batchesRes]=await Promise.all([
+        state.sb.from('plasma_qc_settings').select('*').eq('id',1).single(),
+        state.sb.from('plasma_product_settings').select('*').order('sort_order').order('product_type'),
+        qcAllRows('plasma_records'),
+        state.sb.from('plasma_outlab_batches').select('*').order('sent_at',{ascending:false}).limit(300)
+      ]);
+      const firstError=[settingsRes.error,productsRes.error,recordsRes.error,batchesRes.error].find(Boolean);
+      if(firstError) throw firstError;
+      state.plasmaSettings=settingsRes.data;
+      state.plasmaProductSettings=productsRes.data||[];
+      state.plasmaRecords=(recordsRes.data||[]).map(qcNormalizeRow).sort((a,b)=>String(b.manufactured_on||'').localeCompare(String(a.manufactured_on||''))||String(b.created_at||'').localeCompare(String(a.created_at||'')));
+      state.plasmaBatches=batchesRes.data||[];
+      state.plasmaReady=true;
+    }catch(e){
+      console.warn('Plasma module not ready',e);
+      state.plasmaSettings=null; state.plasmaProductSettings=[]; state.plasmaRecords=[]; state.plasmaBatches=[]; state.plasmaReady=false;
+    }
+  }
+  async function reloadPlasmaRecords(){ if(!state.plasmaReady)return; const {data,error}=await qcAllRows('plasma_records'); if(error)throw error; state.plasmaRecords=(data||[]).map(qcNormalizeRow).sort((a,b)=>String(b.manufactured_on||'').localeCompare(String(a.manufactured_on||''))||String(b.created_at||'').localeCompare(String(a.created_at||''))); updateNcNavBadge(); }
+  async function reloadPlasmaBatches(){ if(!state.plasmaReady)return; const {data,error}=await state.sb.from('plasma_outlab_batches').select('*').order('sent_at',{ascending:false}).limit(300); if(error)throw error; state.plasmaBatches=data||[]; }
+  const plasmaProductSetting = type => state.plasmaProductSettings.find(x=>x.product_type===type);
+  const activePlasmaProducts = () => state.plasmaProductSettings.filter(x=>x.is_active).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)||a.product_type.localeCompare(b.product_type));
+  const plasmaProductOptions = selected => activePlasmaProducts().map(x=>`<option value="${esc(x.product_type)}" ${selected===x.product_type?'selected':''}>${esc(x.product_type)}</option>`).join('');
+  const plasmaQcTH = s => ({incomplete:'ข้อมูลยังไม่ครบ',pass:'ผ่านเกณฑ์ QC',review:'ต้องตรวจสอบ'})[s]||s||'-';
+  const plasmaQcBadge = s => `<span class="badge ${s==='pass'?'pass':s==='review'?'review':'incomplete'}">${esc(plasmaQcTH(s))}</span>`;
+  function plasmaOutlabState(r){ if(!r.outlab_batch_id)return 'รอจัดชุดนำส่ง'; if(r.factor_viii_percent==null)return 'รอผล Factor VIII'; return 'ได้รับผลแล้ว'; }
+
+  $('#loginForm').addEventListener('submit', async e=>{
+    e.preventDefault();
+    let raw=$('#loginEmail').value.trim().toLowerCase();
+    let email=raw.includes('@')?raw:`${raw}@mahidol.ac.th`;
+    const password=$('#loginPassword').value;
+    if(!email.endsWith('@mahidol.ac.th')){ $('#loginMessage').textContent='อนุญาตเฉพาะอีเมล @mahidol.ac.th'; return; }
+    if(password.length<8){ $('#loginMessage').textContent='รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร'; return; }
+    $('#loginMessage').textContent='กำลังเข้าสู่ระบบ...';
+    state.lastLoginPassword=password;
+    const {error}=await state.sb.auth.signInWithPassword({email,password});
+    if(error){ state.lastLoginPassword=null; $('#loginMessage').textContent='อีเมลหรือรหัสผ่านไม่ถูกต้อง'; return; }
+    $('#loginMessage').textContent='';
+  });
+
+  $('#forgotPasswordBtn').addEventListener('click',()=>{
+    $('#loginMessage').textContent='หากลืมรหัสผ่าน กรุณาติดต่อ Admin เพื่อ Reset รหัสผ่านชั่วคราวให้ ระบบจะบังคับให้ตั้งรหัสใหม่หลัง Login';
+  });
+
+  $('#forcePasswordForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    const p1=$('#forceNewPassword').value, p2=$('#forceConfirmPassword').value;
+    if(p1.length<8){$('#forcePasswordMessage').textContent='รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร';return;}
+    if(state.lastLoginPassword && p1===state.lastLoginPassword){$('#forcePasswordMessage').textContent='รหัสผ่านใหม่ต้องไม่เหมือนรหัสผ่านตั้งต้น';return;}
+    if(p1!==p2){$('#forcePasswordMessage').textContent='รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน';return;}
+    $('#forcePasswordMessage').textContent='กำลังบันทึก...';
+    const {error}=await state.sb.auth.updateUser({password:p1});
+    if(error){$('#forcePasswordMessage').textContent='เปลี่ยนรหัสผ่านไม่ได้: '+errText(error);return;}
+    if(state.profile){
+      const {error:flagError}=await state.sb.rpc('complete_password_change');
+      if(flagError){$('#forcePasswordMessage').textContent='เปลี่ยนรหัสผ่านแล้ว แต่บันทึกสถานะไม่สำเร็จ: '+errText(flagError);return;}
+      state.profile={...state.profile,must_change_password:false,password_changed_at:new Date().toISOString()};
+    }
+    $('#forcePasswordMessage').textContent='เปลี่ยนรหัสผ่านเรียบร้อย';
+    showToast('เปลี่ยนรหัสผ่านเรียบร้อย','good');
+    state.lastLoginPassword=null;
+    if(state.profile) await openAppShell(); else { await state.sb.auth.signOut(); showLogin(); }
+  });
+
+  async function logoutWithAudit(){ try{await logActivity('logout','session');}catch(_e){} await state.sb.auth.signOut(); }
+  $('#retrySessionBtn')?.addEventListener('click',()=>restoreCurrentSession(true));
+  $('#resumeLogoutBtn')?.addEventListener('click',async()=>{ clearSessionRetry(); await state.sb?.auth.signOut(); });
+  window.addEventListener('online',()=>{ if(state.session && !state.profile) restoreCurrentSession(true); });
+  $('#forceLogoutBtn').addEventListener('click',()=>state.sb.auth.signOut());
+  $('#logoutBtn').addEventListener('click',logoutWithAudit);
+  $('#closeDetailBtn').addEventListener('click',()=>$('#detailDialog').close());
+  $('#mainTabs').addEventListener('click',e=>{
+    const adminHead=e.target.closest('button[data-nav-head="admin"]');
+    if(adminHead){ setOpenNavGroup('admin'); return; }
+    const b=e.target.closest('button[data-route]');
+    if(!b) return;
+    const head=b.dataset.navHead;
+    if(head){
+      const isOpen=state.openNavGroup===head;
+      const currentRoute=parseRoute();
+      if(isOpen && currentRoute.module===head && currentRoute.hash===b.dataset.route){ setOpenNavGroup(head,false); return; }
+      setOpenNavGroup(head,true);
+    }
+    if(b.dataset.route===ROUTES.platelet.record)state.currentRecordId=null;
+    if(b.dataset.route===ROUTES.plasma.record)state.currentPlasmaRecordId=null;
+    location.hash=b.dataset.route;
+    if(!desktopSidebar()) closeSidebar();
+  });
+  $('#mobileMenuBtn').addEventListener('click',()=>{
+    if(desktopSidebar()) toggleDesktopSidebar();
+    else $('#sideNav').classList.contains('open')?closeSidebar():openSidebar();
+  });
+  $('#sidebarCollapseBtn')?.addEventListener('click',toggleDesktopSidebar);
+  $('#sidebarBackdrop').addEventListener('click',closeSidebar);
+  window.addEventListener('resize',()=>{ applySidebarCollapsed(); if(desktopSidebar()) closeSidebar(); });
+  $('#modeMenuBtn').addEventListener('click',()=>{ const m=$('#modeMenu'); const willOpen=m.classList.contains('hidden'); m.classList.toggle('hidden',!willOpen); $('#modeMenuBtn').setAttribute('aria-expanded',willOpen?'true':'false'); });
+  $$('#modeMenu [data-ui-mode]').forEach(b=>b.addEventListener('click',()=>setUiMode(b.dataset.uiMode)));
+  document.addEventListener('click',e=>{ if(!e.target.closest('#adminModePanel')){ $('#modeMenu')?.classList.add('hidden'); $('#modeMenuBtn')?.setAttribute('aria-expanded','false'); } });
+
+  $('#changePasswordBtn').addEventListener('click',()=>{
+    $('#currentPassword').value=''; $('#newPassword').value=''; $('#confirmPassword').value=''; $('#passwordDialogMessage').textContent='';
+    $('#passwordDialog').showModal();
+  });
+  $('#closePasswordDialogBtn').addEventListener('click',()=>$('#passwordDialog').close());
+  $('#cancelPasswordBtn').addEventListener('click',()=>$('#passwordDialog').close());
+  $('#passwordDialogForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    const current=$('#currentPassword').value, p1=$('#newPassword').value, p2=$('#confirmPassword').value;
+    if(current.length<8 || p1.length<8){$('#passwordDialogMessage').textContent='รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร';return;}
+    if(p1!==p2){$('#passwordDialogMessage').textContent='รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน';return;}
+    if(current===p1){$('#passwordDialogMessage').textContent='รหัสผ่านใหม่ต้องไม่เหมือนรหัสผ่านปัจจุบัน';return;}
+    $('#passwordDialogMessage').textContent='กำลังตรวจสอบรหัสผ่านปัจจุบัน...';
+    const {error:loginError}=await state.sb.auth.signInWithPassword({email:state.user.email,password:current});
+    if(loginError){$('#passwordDialogMessage').textContent='รหัสผ่านปัจจุบันไม่ถูกต้อง';return;}
+    const {error}=await state.sb.auth.updateUser({password:p1});
+    if(error){$('#passwordDialogMessage').textContent='เปลี่ยนรหัสผ่านไม่ได้: '+errText(error);return;}
+    await state.sb.rpc('complete_password_change');
+    $('#passwordDialog').close(); showToast('เปลี่ยนรหัสผ่านเรียบร้อย','good');
+  });
+
+  $('#closeAdminResetPasswordBtn').addEventListener('click',()=>$('#adminResetPasswordDialog').close());
+  $('#cancelAdminResetPasswordBtn').addEventListener('click',()=>$('#adminResetPasswordDialog').close());
+  $('#adminResetPasswordForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    if(!adminUi()||!state.resetTargetId) return;
+    const p1=$('#adminTempPassword').value,p2=$('#adminTempPasswordConfirm').value;
+    if(p1.length<8){$('#adminResetPasswordMessage').textContent='รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร';return;}
+    if(p1!==p2){$('#adminResetPasswordMessage').textContent='รหัสผ่านทั้งสองช่องไม่ตรงกัน';return;}
+    $('#adminResetPasswordMessage').textContent='กำลัง Reset password...';
+    try{
+      await invokeAdminUsers({action:'reset_password',user_id:state.resetTargetId,password:p1});
+      $('#adminResetPasswordDialog').close(); showToast('Reset password แล้ว ผู้ใช้ต้องเปลี่ยนรหัสเมื่อ Login ครั้งถัดไป','good');
+      await loadProfiles(); if(state.currentView==='users') renderUsers();
+    }catch(e2){$('#adminResetPasswordMessage').textContent=errText(e2);}
+  });
+
+  function switchView(v,fromRoute=false,routeObj=null){
+    let route=routeObj || (fromRoute?parseRoute():null);
+    if(!fromRoute){
+      const target=routeForView(v);
+      if(location.hash!==target){ location.hash=target; return; }
+      route=parseRoute();
+    }
+    route=route||parseRoute();
+    if(route.reviewerOnly&&!reviewerUi()){ location.hash=ROUTES.home; return; }
+    if(route.adminOnly&&!adminUi()){
+      location.hash=route.module?ROUTES[route.module].dashboard:ROUTES.home;
+      return;
+    }
+    state.currentView=v;
+    state.currentModule=route.module||null;
+    state.currentPage=route.page||null;
+    updateRouteChrome(route);
+    $$('.view').forEach(x=>x.classList.add('hidden'));
+    const host=$(`#view-${v}`);
+    if(!host){ location.hash=ROUTES.home; return; }
+    host.classList.remove('hidden');
+    if(v==='home') renderHome();
+    if(v==='backlog') renderBacklog(true);
+    else updateBacklogBadge();
+    if(v==='dashboard') renderDashboard();
+    if(v==='records') renderRecordsList();
+    if(v==='record') renderRecordForm();
+    if(v==='guide') renderPlateletGuide();
+    if(v==='review') renderReviewQueue();
+    if(v==='nonconformance') renderNonconformancePage();
+    if(v==='settings') renderSettings();
+    if(v==='users') renderUsers();
+    if(v==='audit') renderAuditLog();
+    if(v==='module') renderModulePlaceholder(route.module,route.page);
+    if(window.innerWidth<=760) window.scrollTo({top:0,behavior:'smooth'});
+  }
+  window.addEventListener('hashchange',()=>{
+    if($('#appShell') && !$('#appShell').classList.contains('hidden')){
+      const route=normalizeAppRoute();
+      switchView(route.view,true,route);
+    }
+  });
+  function statusBadge(s){ return `<span class="badge ${esc(s)}">${esc(statusTH(s))}</span>`; }
+  function qcBadge(s){ return `<span class="badge ${esc(s)}">${esc(qcTH(s))}</span>`; }
+  function plateletPhDelayed(r){return !!(r?.ph_measured_at&&r?.expiry_at&&!sameBangkokDate(r.ph_measured_at,r.expiry_at));}
+  function plateletAnalyticReviewReasons(r){
+    const out=[],s=state.settings||{};
+    if(r?.platelet_yield!=null&&Number(r.platelet_yield)<Number(s.platelet_yield_min))out.push('platelet_yield');
+    if(r?.residual_wbc!=null&&Number(r.residual_wbc)>Number(s.residual_wbc_max))out.push('residual_wbc');
+    if(r?.ph_value!=null&&Number(r.ph_value)<Number(s.ph_min))out.push('ph_value');
+    if(['conditional_fail','below_min'].includes(r?.pool_release_status))out.push('pool_release');
+    return out;
+  }
+  function plateletEffectiveQcStatus(r){
+    if(!r||r.record_purpose!=='qc')return r?.qc_status||'not_qc';
+    if(plateletAnalyticReviewReasons(r).length)return 'review';
+    // v5.3.45: pH timing is a process deviation. A delayed pH that analytically passes
+    // must not turn an otherwise passing QC into "review" / NC.
+    // Difference between two CBC instruments is review information, NOT failed product QC.
+    // A legacy DB status can still be 'review' solely due to this difference or delayed pH.
+    // Override it only when all analytical product measurements are present and passing.
+    if(r.qc_status==='review'&&plateletAnalyticReviewReasons(r).length===0
+      &&r.platelet_yield!=null&&r.residual_wbc!=null&&r.ph_value!=null
+      &&(plateletPhDelayed(r)|| (r.plt_repeat_diff_pct!=null&&Number(r.plt_repeat_diff_pct)>Number(state.settings?.plt_repeat_diff_max_pct))))return 'pass';
+    return r.qc_status;
+  }
+  function plateletQcLabel(r){const st=plateletEffectiveQcStatus(r);return st==='pass'&&plateletPhDelayed(r)?'QC ผ่าน · ตรวจ pH ล่าช้า':qcTH(st);}
+  function plateletQcBadge(r){const st=plateletEffectiveQcStatus(r);return `<span class="badge ${esc(st)}">${esc(plateletQcLabel(r))}</span>`;}
+  function qcBadgeForRecord(r){ return r?.record_purpose==='qc' ? plateletQcBadge(r) : ''; }
+  function deletedBadge(r){ return r?.deleted_at ? '<span class="badge deleted">ลบแล้ว</span>' : ''; }
+  function pHBadge(r){ if(!r.ph_measured_at||!r.expiry_at) return ''; return sameBangkokDate(r.ph_measured_at,r.expiry_at)?'<span class="badge pass">pH ตรงวัน Exp.</span>':'<span class="badge late">ตรวจ pH ล่าช้า · Process deviation</span>'; }
+  function waitingPH(r){ return r.status==='draft' && !r.ph_value && r.expiry_at; }
+  function bangkokTodayKey(){ return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
+  // pH is required for EVERY Platelet product, not only weekly QC samples.
+  // Future pH is scheduled work, NOT overdue or incomplete QC.
+  function plateletMeasurementTasks(r){
+    if(!r||r.deleted_at)return [];
+    const tasks=[];
+    if(r.record_purpose==='qc'&&r.status!=='locked'){
+      if(r.plt_value_1==null&&r.plt_value_2==null)tasks.push({key:'cbc',label:'ยังขาด CBC',level:'missing'});
+      if(r.wbc_adam==null)tasks.push({key:'adam',label:'ยังขาด ADAM',level:'missing'});
+    }
+    if(r.ph_value==null){
+      const expiry=r.expiry_at?inputFromISO(r.expiry_at).slice(0,10):'';
+      const today=bangkokTodayKey();
+      if(expiry){
+        const dueLabel=dateTH(r.expiry_at,false);
+        if(expiry<today)tasks.push({key:'ph',label:`pH เกินกำหนด · ${dueLabel}`,level:'overdue'});
+        else if(expiry===today)tasks.push({key:'ph',label:'วัด pH วันนี้',level:'due'});
+        else tasks.push({key:'ph',label:`pH กำหนด ${dueLabel}`,level:'upcoming'});
+      }else tasks.push({key:'ph',label:'ยังไม่ระบุวันหมดอายุ / pH',level:'missing'});
+    }
+    return tasks;
+  }
+  function plateletPendingRows(records){
+    return (records||[]).map(r=>({r,tasks:plateletMeasurementTasks(r)}))
+      .filter(x=>x.tasks.some(t=>t.level!=='upcoming'))
+      .sort((a,b)=>{
+        const rank=x=>x.tasks.some(t=>t.level==='overdue')?0:x.tasks.some(t=>t.level==='due')?1:2;
+        return rank(a)-rank(b)||String(a.r.expiry_at||'').localeCompare(String(b.r.expiry_at||''));
+      });
+  }
+  function plateletTaskSummaryBadge(r){
+    const tasks=plateletMeasurementTasks(r),pending=tasks.filter(t=>t.level!=='upcoming');
+    if(pending.length)return `<span class="badge ${pending.some(t=>t.level==='overdue'||t.level==='due')?'review':'incomplete'}">ค้าง ${pending.length}</span>`;
+    if(tasks.length)return '<span class="badge draft">pH ตามกำหนด</span>';
+    return '<span class="badge pass">ครบ</span>';
+  }
+  function plateletReminderPanel(records){
+    const rows=plateletPendingRows(records);
+    const scheduled=(records||[]).map(r=>({r,tasks:plateletMeasurementTasks(r)}))
+      .filter(x=>x.tasks.some(t=>t.level==='upcoming'))
+      .sort((a,b)=>String(a.r.expiry_at||'').localeCompare(String(b.r.expiry_at||'')));
+    const urgent=rows.filter(x=>x.tasks.some(t=>t.level==='overdue'||t.level==='due')).length;
+    return `<div class="panel platelet-reminder-panel" id="platelet-pending-work"><div class="section-title-row"><h2>งานค้าง <span class="pending-count">${rows.length} ถุง</span></h2><span class="badge ${urgent?'review':'draft'}">pH ถึงกำหนด ${urgent}</span></div>
+      ${rows.length?`<div class="reminder-list">${rows.slice(0,12).map(({r,tasks})=>`<button type="button" class="reminder-row record-link" data-id="${r.id}"><div class="reminder-product"><strong>${esc(r.product_no)}</strong><small>${esc(r.product_type)}</small></div><div class="reminder-tags">${tasks.filter(t=>t.level!=='upcoming').map(t=>`<span class="reminder-tag ${t.level}">${esc(t.label)}</span>`).join('')}</div></button>`).join('')}</div>${rows.length>12?`<p class="muted small">มีอีก ${rows.length-12} ถุง · เปิดดูที่รายการ</p>`:''}`:'<p class="muted small" style="margin-top:10px">ไม่มีงานค้างที่ถึงกำหนด</p>'}
+      ${scheduled.length?`<details class="ph-schedule"><summary>pH รอวันหมดอายุ ${scheduled.length} ถุง</summary><div class="reminder-list">${scheduled.slice(0,20).map(({r,tasks})=>`<button type="button" class="reminder-row record-link" data-id="${r.id}"><strong>${esc(r.product_no)}</strong><span class="reminder-tag upcoming">${esc(tasks.find(t=>t.level==='upcoming').label)}</span></button>`).join('')}</div></details>`:''}</div>`;
+  }
+
+  function bindRouteButtons(root=document){
+    $$('[data-go-route]',root).forEach(b=>b.onclick=()=>{
+      const route=b.dataset.goRoute;
+      if(route===ROUTES.backlog){state.backlogFilter={month:b.dataset.backlogMonth||'',module:'',kind:'',owner:'',party:b.dataset.backlogParty||''};}
+      if(route===ROUTES.platelet.record) state.currentRecordId=null;
+      if(route===ROUTES.plasma.record) state.currentPlasmaRecordId=null;
+      if(route===ROUTES.rbc.record) state.currentRbcRecordId=null;
+      if(route===ROUTES.nonconformance) state.currentNonconformanceId=null;
+      location.hash=route;
+    });
+  }
+
+  const NC_STATUS_TH={pending_verification:'รอตรวจสอบ',technical_error:'ปัญหาทางเทคนิค (Technical / Test error)',confirmed_failure:'ยืนยัน QC ไม่ผ่าน (Confirmed failure)',capa_in_progress:'อยู่ระหว่างแก้ไขป้องกันซ้ำ (Corrective Action)',effectiveness_monitoring:'รอติดตามผล (Effectiveness)',closed:'ปิดเคสแล้ว'};
+  const NC_VERIFY_TH={pending:'รอตรวจสอบ',technical_error:'ปัญหาทางเทคนิค (Technical / Test error)',confirmed_failure:'ยืนยัน QC ไม่ผ่าน (Confirmed failure)'};
+  const NC_EFFECT_TH={pending:'รอติดตาม',effective:'ได้ผล / ไม่พบปัญหาซ้ำ',not_effective:'ยังไม่ได้ผล / พบปัญหาซ้ำ'};
+  const NC_EVIDENCE_CATEGORY_TH={verification:'ตรวจสอบผล (Verification)',repeat:'ตรวจซ้ำ (Repeat)',investigation:'สืบหาสาเหตุ (Investigation)',corrective_action:'การแก้ไขป้องกันซ้ำ (Corrective Action)',effectiveness:'ติดตามผล (Effectiveness)',other:'อื่น ๆ (Other)'};
+  const ncModuleTH=m=>({platelet:'Platelet (เกล็ดเลือด)',plasma:'Plasma / FFP (พลาสมา)',rbc:'RBC (เม็ดเลือดแดง)'})[m]||m;
+  const ncStatusBadge=s=>`<span class="badge nc-status ${esc(s||'pending_verification')}">${esc(NC_STATUS_TH[s]||s||'รอตรวจสอบ')}</span>`;
+  const ncEvidenceCategoryLabel=c=>NC_EVIDENCE_CATEGORY_TH[c]||c||'อื่น ๆ';
+  const NC_WIZARD_STEPS=[
+    {n:1,label:'หยุดและตรวจสอบ',icon:'alert'},
+    {n:2,label:'ตรวจซ้ำ',icon:'search'},
+    {n:3,label:'สรุปผลและสาเหตุ',icon:'check'},
+    {n:4,label:'ผลกระทบ',icon:'shield'},
+    {n:6,label:'แผนแก้ไข',icon:'wrench'},
+    {n:7,label:'ติดตามผล',icon:'activity'},
+    {n:8,label:'ปิดเคส',icon:'check'}
+  ];
+  function ncIcon(name){
+    const paths={
+      alert:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6"/><path d="M12 17h.01"/>',
+      search:'<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
+      shield:'<path d="M12 3 5 6v5c0 5 3.5 8 7 10 3.5-2 7-5 7-10V6l-7-3Z"/><path d="m9.5 12 1.6 1.6 3.5-3.6"/>',
+      target:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>',
+      wrench:'<path d="M14.5 6.5a4 4 0 0 0-5 5L4 17l3 3 5.5-5.5a4 4 0 0 0 5-5l-2.7 2.7-2.7-2.7 2.4-3Z"/>',
+      activity:'<path d="M3 12h4l2-5 4 10 2-5h6"/>',
+      paperclip:'<path d="m8 12 6-6a3 3 0 0 1 4 4l-7 7a5 5 0 0 1-7-7l7-7"/>',
+      check:'<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>'
+    };
+    return `<svg class="nc-line-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.check}</svg>`;
+  }
+  const NC_REPEAT_PREFIX='__NCREP2__';
+  function ncRepeatWorkflow(text){
+    const empty={version:2,initial_checks:[],immediate_note:'',repeat_required:'yes',no_repeat_reason:'',rounds:[],first_fail_cause_known:'',continue_investigation:false,capa_required:'',capa_not_required_reason:'',legacy:''};
+    if(!text)return empty;
+    try{
+      if(String(text).startsWith(NC_REPEAT_PREFIX)){
+        const parsed=JSON.parse(String(text).slice(NC_REPEAT_PREFIX.length));
+        return {...empty,...parsed,rounds:Array.isArray(parsed.rounds)?parsed.rounds:[],initial_checks:Array.isArray(parsed.initial_checks)?parsed.initial_checks:[]};
+      }
+    }catch(e){}
+    return {...empty,legacy:String(text)};
+  }
+  function ncRepeatWorkflowString(w){return NC_REPEAT_PREFIX+JSON.stringify({...w,version:2});}
+  function ncRepeatOutcomeTH(v){return ({pass:'ผ่านเกณฑ์',fail:'ยังไม่ผ่าน',inconclusive:'ยังสรุปไม่ได้'})[v]||'รอผล';}
+  function ncRepeatOutcomeBadge(v){return `<span class="badge nc-repeat-outcome ${esc(v||'pending')}">${esc(ncRepeatOutcomeTH(v))}</span>`;}
+  function ncEvaluateRepeat(param,value){
+    const raw=String(value??'').trim(); if(!raw)return '';
+    const numv=Number(raw.replace(/,/g,'')); if(!Number.isFinite(numv))return '';
+    const c=String(param?.criterion||'').replace(/,/g,'').trim();
+    let m=c.match(/^≥\s*([0-9.]+)/); if(m)return numv>=Number(m[1])?'pass':'fail';
+    m=c.match(/^≤\s*([0-9.]+)/); if(m)return numv<=Number(m[1])?'pass':'fail';
+    m=c.match(/^<\s*([0-9.]+)/); if(m)return numv<Number(m[1])?'pass':'fail';
+    m=c.match(/^>\s*([0-9.]+)/); if(m)return numv>Number(m[1])?'pass':'fail';
+    m=c.match(/([0-9.]+)\s*[–-]\s*([0-9.]+)/); if(m)return numv>=Number(m[1])&&numv<=Number(m[2])?'pass':'fail';
+    return '';
+  }
+  function ncRepeatSummaryHtml(workflow,params){
+    const rounds=workflow.rounds||[];
+    if(!rounds.length)return '<div class="nc-repeat-empty">ยังไม่มีผลตรวจซ้ำ</div>';
+    return `<div class="nc-repeat-summary-list">${rounds.map((x,i)=>{const p=params[Number(x.param_index)||0]||params[0]||{};return `<div class="nc-repeat-summary-row"><div><b>ครั้งที่ ${i+1}</b><span>${esc(p.name||'ผล QC')} · ${esc(x.result_value||'–')}</span></div>${ncRepeatOutcomeBadge(x.assessment)}</div>`}).join('')}</div>`;
+  }
+  function ncEvidenceByCategoryHtml(evidence,category,editable){
+    const rows=evidence.filter(e=>e.category===category);
+    return `<div class="nc-step-evidence-list">${rows.length?rows.map(e=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(e.original_name)}</strong><small>${esc(ncEvidenceCategoryLabel(e.category))} · ${esc(profileName(e.uploaded_by))} · ${esc(dateTH(e.created_at))}</small></span><span class="e-actions"><button class="btn small-btn nc-ev-view" data-id="${e.id}">ดู</button>${editable?`<button class="btn small-btn danger nc-ev-delete" data-id="${e.id}">ลบ</button>`:''}</span></div>`).join(''):'<div class="muted small">ยังไม่มีหลักฐานในขั้นตอนนี้</div>'}</div>`;
+  }
+  function ncEvidenceUploaderHtml(category,evidence,editable,label='แนบหลักฐาน'){
+    const safe=String(category).replace(/[^a-z_]/g,'');
+    return `<div class="nc-inline-evidence"><div class="nc-inline-evidence-head"><strong>${esc(label)}</strong><span>${evidence.filter(e=>e.category===category).length} ไฟล์</span></div>${editable?`<div class="nc-inline-evidence-actions"><input class="hidden-file-input" type="file" id="ncEvCam_${safe}" data-nc-upload-input data-category="${safe}" accept="image/*" capture="environment"><input class="hidden-file-input" type="file" id="ncEvFile_${safe}" data-nc-upload-input data-category="${safe}" accept="image/*,application/pdf" multiple><button class="btn small-btn primary" type="button" data-nc-upload-target="ncEvCam_${safe}">ถ่ายรูป</button><button class="btn small-btn" type="button" data-nc-upload-target="ncEvFile_${safe}">เลือกรูป / ไฟล์ <span class="multi-file-label">หลายไฟล์ได้</span></button></div>`:''}${ncEvidenceByCategoryHtml(evidence,category,editable)}</div>`;
+  }
+  function ncSuggestedStep(n){
+    if(!n)return 1;
+    const w=ncRepeatWorkflow(n.repeat_result);
+    if((n.verification_result||'pending')==='pending'){
+      if(w.repeat_required==='yes'&&!(w.rounds||[]).length)return 2;
+      return 3;
+    }
+    if(!n.root_cause_category||!n.root_cause_detail||!n.immediate_correction)return 3;
+    if(!n.product_status||!n.disposition)return 4;
+    if(!w.capa_required)return 6;
+    if(w.capa_required==='yes'&&(!n.corrective_action||!n.responsible_by||!n.due_date))return 6;
+    if(w.capa_required==='yes'&&(!n.effectiveness_method||!n.effectiveness_due_date||!n.effectiveness_result||n.effectiveness_result==='pending'))return 7;
+    return 8;
+  }
+  function ncStepTabs(active){
+    return `<div class="nc-wizard-tabs" role="tablist">${NC_WIZARD_STEPS.map(s=>`<button type="button" class="nc-wizard-tab ${s.n===active?'active':''}" data-nc-step-go="${s.n}" role="tab" aria-selected="${s.n===active?'true':'false'}"><span class="nc-wizard-icon">${ncIcon(s.icon)}</span><span class="nc-wizard-tab-text"><b>${NC_WIZARD_STEPS.indexOf(s)+1}</b>${esc(s.label)}</span></button>`).join('')}</div>`;
+  }
+  function recordForModule(module,id){
+    if(module==='platelet')return state.records.find(r=>r.id===id)||null;
+    if(module==='plasma')return state.plasmaRecords.find(r=>r.id===id)||null;
+    if(module==='rbc')return state.rbcRecords.find(r=>r.id===id)||null;
+    return null;
+  }
+  function ncByRecord(module,recordId){return state.nonconformances.find(n=>n.module===module&&n.record_id===recordId)||null;}
+  function deletedNcByRecord(module,recordId){return (state.deletedNonconformances||[]).find(n=>n.module===module&&String(n.record_id)===String(recordId))||(state.ncTombstones||[]).find(n=>n.module===module&&String(n.record_id)===String(recordId))||null;}
+  function anyNcByRecord(module,recordId){return ncByRecord(module,recordId)||deletedNcByRecord(module,recordId)||null;}
+  function sourceQcBadge(module,r){return module==='plasma'?plasmaQcBadge(r?.qc_status):module==='rbc'?rbcRecordDecisionBadge(r):(r?.record_purpose==='qc'?plateletQcBadge(r):'');}
+  function sourceRecordDate(module,r){return module==='platelet'?dateTH(r?.collection_at,false):esc(r?.manufactured_on||'–');}
+  function pendingQcFailures(){
+    const out=[];
+    state.records.filter(r=>!r.deleted_at&&r.record_purpose==='qc'&&plateletEffectiveQcStatus(r)==='review').forEach(r=>{if(!anyNcByRecord('platelet',r.id))out.push({module:'platelet',record:r});});
+    if(state.plasmaReady)state.plasmaRecords.filter(r=>!r.deleted_at&&r.qc_status==='review').forEach(r=>{if(!anyNcByRecord('plasma',r.id))out.push({module:'plasma',record:r});});
+    if(state.rbcReady)state.rbcRecords.filter(r=>!r.deleted_at&&r.status!=='locked'&&(rbcEffectiveQcStatus(r)==='review')).forEach(r=>{if(!anyNcByRecord('rbc',r.id))out.push({module:'rbc',record:r});});
+    return out.sort((a,b)=>String(b.record.updated_at||b.record.created_at||'').localeCompare(String(a.record.updated_at||a.record.created_at||'')));
+  }
+  function updateNcNavBadge(){
+    const el=$('#ncCount');if(!el)return;
+    if(!state.nonconformanceReady){el.textContent='';return;}
+    const n=state.nonconformances.filter(x=>x.status!=='closed').length+pendingQcFailures().length;
+    el.textContent=n?String(n):'';
+  }
+  function failedParametersFor(module,r){
+    const p=[];
+    const add=(name,value,criterion,kind='fail')=>p.push({name,value,criterion,kind});
+    if(module==='platelet'){
+      const s=state.settings||{};
+      if(r.platelet_yield!=null&&Number(r.platelet_yield)<Number(s.platelet_yield_min))add('Platelet yield (ปริมาณเกล็ดเลือด)',`${fmt(r.platelet_yield,3)} ×10¹¹ cells/unit`,`≥ ${fmt(s.platelet_yield_min,2)} ×10¹¹ cells/unit`);
+      if(r.residual_wbc!=null&&Number(r.residual_wbc)>Number(s.residual_wbc_max))add('Residual WBC (เม็ดเลือดขาวคงเหลือ)',`${fmt(r.residual_wbc,3)} ×10⁶ cells/unit`,`≤ ${fmt(s.residual_wbc_max,2)} ×10⁶ cells/unit`);
+      if(r.ph_value!=null&&Number(r.ph_value)<Number(s.ph_min))add('pH',fmt(r.ph_value,3),`≥ ${fmt(s.ph_min,2)}`);
+      // PLT difference is displayed for physician review in the list, not treated as an NC reason.
+      // Timing deviations are process findings, not failed analytical QC parameters.
+      // Keep them visible on the product record instead of classifying them as an NC failed parameter.
+      if(['conditional_fail','below_min'].includes(r.pool_release_status))add('Pool PYI / ฉลาก',poolReleaseTH(r.pool_release_status),'ต้องผ่านเกณฑ์ Pool / เงื่อนไขฉลาก');
+    }else if(module==='plasma'){
+      const s=state.plasmaSettings||{};
+      if(r.volume_ml!=null&&Number(r.volume_ml)<Number(s.volume_min_ml))add('Volume (ปริมาตร)',`${fmt(r.volume_ml,2)} mL`,`≥ ${fmt(s.volume_min_ml,0)} mL`);
+      if(r.factor_viii_iu_ml!=null&&Number(r.factor_viii_iu_ml)<Number(s.factor_viii_min_iu_ml))add('Factor VIII (ปัจจัย VIII)',`${fmt(r.factor_viii_iu_ml,3)} IU/mL`,`≥ ${fmt(s.factor_viii_min_iu_ml,2)} IU/mL`);
+    }else if(module==='rbc'){
+      [1,2].forEach(i=>rbcMachineFindings(r,i).fail.forEach(f=>{
+        const unit=f.key==='wbc'?(rbcProductSetting(r.product_type)?.product_class==='ldprc'?' ×10⁶ cells/unit':' ×10⁹ cells/unit'):f.key==='hct'?'%':f.key==='volume'?' mL':' g/unit';
+        add(`${f.label} · เครื่องที่ ${i}`,`${fmt(f.value,f.key==='hb'?rbcHbDigits():3)}${unit}`,f.limit);
+      }));
+    }
+    if(!p.length)add('ผลประเมิน QC','ต้องตรวจสอบ QC','ตรวจสอบสาเหตุจากผลและหลักฐานต้นฉบับ','check');
+    return p;
+  }
+  function ncParamHtml(params){
+    const arr=Array.isArray(params)?params:[];
+    return `<div class="nc-param-grid">${arr.map(x=>`<div class="nc-param-card ${x.kind==='check'?'check':''}"><strong>${esc(x.name)}</strong><span>${esc(x.value)}</span><small>เกณฑ์: ${esc(x.criterion)}</small></div>`).join('')}</div>`;
+  }
+  function ncRootCauseOptions(module,productType){
+    if(module==='platelet'){
+      if(String(productType||'').startsWith('SDP'))return ['Donor / ผู้บริจาค','Apheresis machine / เครื่องเก็บ SDP','Collection kit / ชุดเก็บและ lot','Collection process / ขั้นตอนการเก็บ','Processing time / ระยะเวลาเตรียมผลิตภัณฑ์','Storage / การเก็บรักษา','CBC / PLT measurement / การวัด CBC-PLT','ADAM / WBC measurement / การวัด ADAM-WBC','pH measurement / การวัด pH','Operator / ผู้ปฏิบัติงาน','อื่น ๆ / Other'];
+      return ['Donor / แหล่งเลือดตั้งต้น','Centrifuge / การปั่น','Pool / การรวมถุง','Processing time / ระยะเวลาเตรียมผลิตภัณฑ์','Bag lot / lot ถุง','Storage / การเก็บรักษา','CBC / PLT measurement / การวัด CBC-PLT','ADAM / WBC measurement / การวัด ADAM-WBC','pH measurement / การวัด pH','Operator / ผู้ปฏิบัติงาน','อื่น ๆ / Other'];
+    }
+    if(module==='plasma')return ['Collection / การเก็บ','Centrifuge / การปั่น','Time to freezing / เวลาก่อนแช่แข็ง','Freezing process / ขั้นตอนแช่แข็ง','Storage temperature / อุณหภูมิการเก็บ','Sample / Segment / ตัวอย่างหรือ segment','Outlab / Factor VIII result / ผลจากห้องปฏิบัติการภายนอก','Calculation / การคำนวณ','Equipment / เครื่องมือ','Operator / ผู้ปฏิบัติงาน','อื่น ๆ / Other'];
+    return ['Source product / ผลิตภัณฑ์ต้นทาง','Centrifuge / การปั่น','Filtration / การกรอง','Filter lot / lot filter','Bag lot / lot ถุง','Weight / Volume / น้ำหนักหรือปริมาตร','CBC measurement / การวัด CBC','ADAM measurement / การวัด ADAM','LIS data / ข้อมูลจาก LIS','Storage / การเก็บรักษา','Operator / ผู้ปฏิบัติงาน','อื่น ๆ / Other'];
+  }
+  function selectOptions(items,selected,placeholder='เลือก'){
+    return `<option value="">${placeholder}</option>`+items.map(x=>`<option value="${esc(x)}" ${selected===x?'selected':''}>${esc(x)}</option>`).join('');
+  }
+  function profileOptions(selected){
+    return `<option value="">เลือกผู้รับผิดชอบ</option>`+state.profiles.filter(p=>p.is_active!==false).map(p=>`<option value="${p.id}" ${selected===p.id?'selected':''}>${esc(p.display_name||p.email)}</option>`).join('');
+  }
+  function ncActionButton(module,recordId){
+    const n=ncByRecord(module,recordId);
+    if(n)return `<button type="button" class="btn nc-open-existing" data-nc-id="${n.id}">เปิด ${esc(n.nc_no)}</button>`;
+    if(!state.nonconformanceReady)return `<button type="button" class="btn" data-go-route="#/nonconformance">ตั้งค่าการแก้ไขป้องกันซ้ำ (Corrective Action)</button>`;
+    return staffWriteUi()?`<button type="button" class="btn danger-soft nc-create" data-module="${module}" data-record-id="${recordId}">เริ่มจัดการ QC ไม่ผ่าน</button>`:'';
+  }
+  function bindNcButtons(root=document){
+    $$('.nc-create',root).forEach(b=>b.onclick=()=>{if($('#detailDialog')?.open)$('#detailDialog').close();createNonconformance(b.dataset.module,b.dataset.recordId);});
+    $$('.nc-open-existing',root).forEach(b=>b.onclick=()=>{if($('#detailDialog')?.open)$('#detailDialog').close();state.currentNonconformanceId=b.dataset.ncId;location.hash=ROUTES.nonconformance;if(cleanHash()===ROUTES.nonconformance)renderNonconformancePage();});
+  }
+  async function createNonconformance(module,recordId){
+    if(!state.nonconformanceReady){showToast('กรุณา Run SQL v5.3.23 ก่อนใช้งาน Corrective Action','error');location.hash=ROUTES.nonconformance;return;}
+    if(!Array.isArray(state.ncTombstones)){showToast('กรุณาตรวจสอบ SQL v5.3.47 ก่อนสร้าง NC','error');return;}
+    const existing=ncByRecord(module,recordId);if(existing){state.currentNonconformanceId=existing.id;location.hash=ROUTES.nonconformance;return;}
+    const deletedExisting=deletedNcByRecord(module,recordId);if(deletedExisting){showToast(`ถุงนี้เคยมี ${deletedExisting.nc_no||'NC'} และถูกลบพร้อมเก็บ Audit แล้ว ระบบจะไม่สร้าง NC ซ้ำอัตโนมัติ`,'error');return;}
+    const r=recordForModule(module,recordId);if(!r){showToast('ไม่พบรายการ QC ต้นฉบับ','error');return;}
+    const needsReview=module==='rbc'?rbcEffectiveQcStatus(r)==='review':module==='platelet'?plateletEffectiveQcStatus(r)==='review':r.qc_status==='review';
+    if(!needsReview){showToast(module==='platelet'&&plateletPhDelayed(r)?'ค่า pH ผ่านเกณฑ์ การตรวจล่าช้าเป็น Process deviation ตาม SOP ไม่สร้าง NC จากสาเหตุนี้':'รายการนี้ไม่ได้อยู่ในสถานะ QC ต้องตรวจสอบ','error');return;}
+    try{
+      const payload={module,record_id:recordId,product_no:r.product_no,product_type:r.product_type,failed_parameters:failedParametersFor(module,r),created_by:state.user.id};
+      const {data,error}=await state.sb.from('qc_nonconformances').insert(payload).select('*').single();if(error)throw error;
+      await reloadNonconformanceData();state.currentNonconformanceId=data.id;state.ncWizardStepById[data.id]=1;await logActivity('create','nonconformance',data.id,{module,record_id:recordId,nc_no:data.nc_no});location.hash=ROUTES.nonconformance;if(cleanHash()===ROUTES.nonconformance)renderNonconformancePage();showToast(`สร้าง ${data.nc_no} แล้ว`,'good');
+    }catch(e){showToast(errText(e),'error');}
+  }
+  function renderNcPendingCard(x){
+    const r=x.record,params=failedParametersFor(x.module,r);
+    return `<article class="nc-queue-card"><div class="nc-queue-head"><div><span class="badge">${esc(ncModuleTH(x.module))}</span><h3>${esc(r.product_no)}</h3><p>${esc(r.product_type)}</p></div>${sourceQcBadge(x.module,r)}</div>${ncParamHtml(params)}<div class="nc-queue-foot"><span class="muted small">${esc(sourceRecordDate(x.module,r))}</span>${staffWriteUi()?`<button class="btn primary nc-create" data-module="${x.module}" data-record-id="${r.id}">เริ่มตรวจสอบ</button>`:''}</div></article>`;
+  }
+  // Existing NC remains until verification, CAPA decision and authorized closure; pH timing alone is not analytic QC failure.
+  function renderNcCaseCard(n){
+    const overdue=n.due_date&&n.status!=='closed'&&new Date(`${n.due_date}T23:59:59+07:00`)<new Date();
+    return `<button type="button" class="nc-case-card nc-open-existing" data-nc-id="${n.id}"><div class="nc-case-card-head"><div><strong>${esc(n.nc_no)}</strong><span>${esc(n.product_no)} · ${esc(n.product_type)}</span></div>${ncStatusBadge(n.status)}</div><div class="nc-case-meta"><span>${esc(ncModuleTH(n.module))}</span><span>สร้าง ${esc(dateTH(n.created_at,false))}</span>${n.responsible_by?`<span>ผู้รับผิดชอบ ${esc(profileName(n.responsible_by))}</span>`:''}${n.due_date?`<span class="${overdue?'overdue':''}">ครบกำหนด ${esc(n.due_date)}</span>`:''}</div></button>`;
+  }
+  function renderNonconformancePage(){
+    if(!state.nonconformanceReady){
+      $('#view-nonconformance').innerHTML=`<div class="page-head"><div><h1>QC ไม่ผ่าน / Corrective Action</h1><p class="muted">ใช้ร่วมกันสำหรับ Platelet (เกล็ดเลือด) · Plasma / FFP (พลาสมา) · RBC (เม็ดเลือดแดง)</p></div></div><div class="notice warning"><strong>ยังไม่ได้เปิดฐานข้อมูลสำหรับหน้านี้</strong><br>ให้ Run SQL <code>00_RUN_IN_SUPABASE_v5_3_23_ADMIN_NC_SOFT_DELETE.sql</code> ก่อน แล้ว Refresh หน้าเว็บอีกครั้ง</div><div class="panel"><div class="nc-section-head"><span class="nc-step-no">1</span><div><h2>ลำดับการทำงาน</h2><p class="muted small">หยุดและตรวจสอบ → Repeat → สรุปผลและสาเหตุ → ประเมินผลกระทบ → Corrective Action → Effectiveness → ปิดเคส</p></div></div><div class="nc-flow-preview"><span>QC ต้องตรวจสอบ</span><b>→</b><span>Repeat</span><b>→</b><span>สรุปผลและสาเหตุ</span><b>→</b><span>ผลกระทบ</span><b>→</b><span>Corrective Action</span><b>→</b><span>Effectiveness</span><b>→</b><span>ปิดเคส</span></div></div>`;
+      return;
+    }
+    const current=state.currentNonconformanceId?state.nonconformances.find(n=>n.id===state.currentNonconformanceId):null;
+    if(current){renderNonconformanceDetail(current);return;}
+    const pending=pendingQcFailures(),open=state.nonconformances.filter(n=>n.status!=='closed'),closed=state.nonconformances.filter(n=>n.status==='closed');
+    const effectiveness=open.filter(n=>n.status==='effectiveness_monitoring').length;
+    $('#view-nonconformance').innerHTML=`<div class="page-head"><div><h1>QC ไม่ผ่าน / Corrective Action</h1><p class="muted">จัดการเคส QC ไม่ผ่านในหน้าเดียว ใช้ง่าย และตามย้อนหลังได้</p></div></div>
+      <div class="grid cards nc-metrics">${metric('รอเปิดเคส',pending.length,'ผล QC ที่ต้องเริ่มตรวจสอบ')}${metric('กำลังดำเนินการ',open.length,'เคสที่ยังไม่ปิด')}${metric('รอติดตามผล',effectiveness,'ติดตามหลังแก้ไข')}${metric('ปิดแล้ว',closed.length,'ประวัติย้อนหลัง')}</div>
+      <div class="panel"><div class="section-title-row"><div><h2>รายการที่ต้องเปิดเคส</h2><p class="muted small">ระบบดึงเฉพาะรายการ QC ที่ขึ้นสถานะ “ต้องตรวจสอบ” และยังไม่มีเคส</p></div><span class="badge review">${pending.length}</span></div>${pending.length?`<div class="nc-queue-grid">${pending.map(renderNcPendingCard).join('')}</div>`:'<div class="empty">ไม่มีรายการที่ต้องเปิดเคส</div>'}</div>
+      <div class="panel"><div class="section-title-row"><div><h2>เคสที่เปิดแล้ว</h2><p class="muted small">กดรายการเพื่อเข้าไปกรอก ตรวจทวน หรือปิดเคส</p></div></div><div class="filters nc-filters"><select id="ncModuleFilter"><option value="">ทุกผลิตภัณฑ์</option><option value="platelet">Platelet (เกล็ดเลือด)</option><option value="plasma">Plasma / FFP (พลาสมา)</option><option value="rbc">RBC (เม็ดเลือดแดง)</option></select><select id="ncStatusFilter"><option value="">ทุกสถานะ</option>${Object.entries(NC_STATUS_TH).map(([v,t])=>`<option value="${v}">${esc(t)}</option>`).join('')}</select></div><div id="ncCaseList"></div></div>`;
+    $('#ncModuleFilter').value=state.ncModuleFilter||'';$('#ncStatusFilter').value=state.ncStatusFilter||'';
+    const draw=()=>{state.ncModuleFilter=$('#ncModuleFilter').value;state.ncStatusFilter=$('#ncStatusFilter').value;const rows=state.nonconformances.filter(n=>(!state.ncModuleFilter||n.module===state.ncModuleFilter)&&(!state.ncStatusFilter||n.status===state.ncStatusFilter));$('#ncCaseList').innerHTML=rows.length?`<div class="nc-case-list">${rows.map(renderNcCaseCard).join('')}</div>`:'<div class="empty">ไม่พบเคสตามตัวกรอง</div>';bindNcButtons($('#ncCaseList'));};
+    $('#ncModuleFilter').onchange=draw;$('#ncStatusFilter').onchange=draw;draw();bindNcButtons($('#view-nonconformance'));
+  }
+  function ncProductStatusOptions(selected){return selectOptions([['in_stock','ยังอยู่ในคลัง'],['issued_not_transfused','จ่ายออกแล้ว แต่ยังไม่ให้ผู้ป่วย'],['transfused','ให้ผู้ป่วยแล้ว'],['destroyed','ทำลายแล้ว'],['unknown','ยังไม่ทราบ']].map(x=>x[0]),selected).replace(/>in_stock</,'>ยังอยู่ในคลัง<').replace(/>issued_not_transfused</,'>จ่ายออกแล้ว แต่ยังไม่ให้ผู้ป่วย<').replace(/>transfused</,'>ให้ผู้ป่วยแล้ว<').replace(/>destroyed</,'>ทำลายแล้ว<').replace(/>unknown</,'>ยังไม่ทราบ<');}
+  function enumOptions(items,selected,placeholder='เลือก'){return `<option value="">${placeholder}</option>`+items.map(([v,t])=>`<option value="${v}" ${selected===v?'selected':''}>${esc(t)}</option>`).join('');}
+  function renderNonconformanceDetail(n){
+    const r=recordForModule(n.module,n.record_id),closed=n.status==='closed',editable=!closed&&(staffWriteUi()||adminUi()),canClose=!closed&&(adminUi()||reviewerUi()),params=Array.isArray(n.failed_parameters)?n.failed_parameters:[],evidence=state.nonconformanceEvidence.filter(e=>e.nonconformance_id===n.id);
+    const roots=ncRootCauseOptions(n.module,n.product_type),workflow=ncRepeatWorkflow(n.repeat_result);
+    const chosenStep=Number(state.ncWizardStepById[n.id]||ncSuggestedStep(n)||1);
+    const activeStep=NC_WIZARD_STEPS.some(x=>x.n===chosenStep)?chosenStep:3;
+    const stepPanel=(step,icon,title,en,sub,body,extra='')=>`<section class="nc-step-panel ${step===activeStep?'active':''}" data-nc-step-panel="${step}"><div class="nc-step-panel-head"><span class="nc-step-hero-icon">${ncIcon(icon)}</span><div><span class="nc-step-kicker">ขั้นตอน ${NC_WIZARD_STEPS.findIndex(x=>x.n===step)+1} จาก 7</span><h2>${title}${en?` <small>${en}</small>`:''}</h2>${sub?`<p>${sub}</p>`:''}</div>${extra}</div><div class="nc-step-content">${body}</div></section>`;
+    const checkItems=[['quarantine','กักกัน / งดใช้ผลิตภัณฑ์ (ถ้ายังอยู่ในคลัง)'],['entry','ตรวจข้อมูลที่กรอกและการคำนวณ'],['sample','ตรวจตัวอย่างที่ใช้ทดสอบ'],['equipment','ตรวจเครื่องมือและ QC เครื่อง'],['method','ทบทวนวิธีทดสอบ / ขั้นตอนปฏิบัติ']];
+    const step1=stepPanel(1,'alert','หยุดและตรวจสอบเบื้องต้น','','ดูค่าที่ผิดเกณฑ์ แล้วทำสิ่งจำเป็นก่อนตรวจซ้ำ',`${ncParamHtml(params)}<div class="nc-action-checklist"><h3>การดำเนินการทันที</h3>${checkItems.map(([v,t])=>`<label class="nc-check-item"><input type="checkbox" class="nc-initial-check" value="${v}" ${workflow.initial_checks.includes(v)?'checked':''} ${editable?'':'disabled'}><span>${t}</span></label>`).join('')}<div class="nc-form-field nc-wide"><label>บันทึกเพิ่มเติม <span class="optional">ถ้ามี</span></label><textarea id="ncImmediateNote" ${editable?'':'disabled'} placeholder="เช่น กักกันถุงแล้ว / ตรวจเครื่องแล้วไม่พบความผิดปกติ">${esc(workflow.immediate_note||'')}</textarea></div></div>${ncEvidenceUploaderHtml('verification',evidence,editable,'หลักฐานการตรวจสอบเบื้องต้น')}<div class="nc-source-meta"><span>เลขผลิตภัณฑ์ <b>${esc(n.product_no)}</b></span><span>ชนิดผลิตภัณฑ์ <b>${esc(n.product_type)}</b></span><span>ผู้เปิดเคส <b>${esc(profileName(n.created_by))}</b></span><span>วันที่เปิดเคส <b>${esc(dateTH(n.created_at))}</b></span></div>`,sourceQcBadge(n.module,r||{}));
+    const paramOpts=params.map((p,i)=>`<option value="${i}">${esc(p.name)} · เกณฑ์ ${esc(p.criterion)}</option>`).join('');
+    const step2=stepPanel(2,'search','ตรวจซ้ำ','Repeat','บันทึกผลตรวจซ้ำเป็นรายครั้ง โดยไม่ทับผลเดิม',`<input type="hidden" id="ncRepeatWorkflow"><div class="nc-repeat-choice"><label class="nc-choice-card"><input type="radio" name="ncRepeatRequired" value="yes" ${workflow.repeat_required!=='no'?'checked':''} ${editable?'':'disabled'}><span><b>ทำการตรวจซ้ำ (Repeat)</b><small>ใช้เมื่อ WI / วิธีปฏิบัติกำหนดให้ตรวจยืนยันผล</small></span></label><label class="nc-choice-card"><input type="radio" name="ncRepeatRequired" value="no" ${workflow.repeat_required==='no'?'checked':''} ${editable?'':'disabled'}><span><b>ไม่ทำ Repeat</b><small>เลือกได้เมื่อมีเหตุผลตาม WI หรือสรุปจากการตรวจสอบได้โดยไม่ต้องตรวจซ้ำ</small></span></label></div><div id="ncNoRepeatReasonWrap" class="nc-form-field nc-wide ${workflow.repeat_required==='no'?'':'hidden'}"><label>เหตุผลที่ไม่ทำ Repeat</label><textarea id="ncNoRepeatReason" ${editable?'':'disabled'} placeholder="ระบุเหตุผลให้ชัดเจน">${esc(workflow.no_repeat_reason||'')}</textarea></div><div id="ncRepeatRoundsWrap" class="${workflow.repeat_required==='no'?'hidden':''}"><div class="nc-repeat-toolbar"><div><h3>ผลตรวจซ้ำ</h3><p>เพิ่มครั้งใหม่ได้ หากยังต้องตรวจยืนยันต่อ</p></div>${editable?'<button type="button" class="btn primary" id="ncAddRepeat">+ เพิ่ม Repeat</button>':''}</div><div id="ncRepeatRounds"></div></div>${ncEvidenceUploaderHtml('repeat',evidence,editable,'หลักฐานผลตรวจซ้ำ')}`);
+    const finalConclusionExtra=(n.verification_result||'pending')==='pending'?`<div class="nc-form-field"><label>หลังสอบสวน สรุปเคสเป็น</label><select id="ncInvestigationConclusion" ${editable?'':'disabled'}>${enumOptions([['technical_error',NC_VERIFY_TH.technical_error],['confirmed_failure',NC_VERIFY_TH.confirmed_failure]],'','เลือกผลหลังสอบสวน')}</select></div>`:'';
+    const investigationStage=stepPanel(5,'target','หาสาเหตุและแก้ไขเบื้องต้น','','หาสาเหตุจริง แล้วบันทึกสิ่งที่ทำทันทีเพื่อควบคุมเหตุการณ์',`<div class="nc-form-grid">${finalConclusionExtra}<div class="nc-form-field"><label>หมวดสาเหตุหลัก</label><select id="ncRootCause" ${editable?'':'disabled'}>${selectOptions(roots,n.root_cause_category,'เลือกหมวดสาเหตุ')}</select></div><div class="nc-form-field nc-wide"><label>รายละเอียดสาเหตุ <small>Root cause</small></label><textarea id="ncRootDetail" ${editable?'':'disabled'} placeholder="สรุปสาเหตุที่แท้จริงจากการสอบสวน">${esc(n.root_cause_detail||n.verification_note||'')}</textarea></div><div class="nc-form-field nc-wide"><label>การแก้ไขเบื้องต้น <small>Correction</small></label><textarea id="ncCorrection" ${editable?'':'disabled'} placeholder="เช่น กักกันถุง ตรวจซ้ำ ตรวจเครื่อง เปลี่ยน consumable">${esc(n.immediate_correction||'')}</textarea></div></div>${ncEvidenceUploaderHtml('investigation',evidence,editable,'หลักฐานการสอบสวน')}`);
+    const step3=stepPanel(3,'check','สรุปผลการตรวจสอบและหาสาเหตุ','','สรุปผล Repeat พร้อมสาเหตุและการแก้ไขเบื้องต้นในหน้าเดียว',`<div id="ncDecisionHost"></div><div id="ncRepeatSummaryHost"></div><div id="ncRepeatPassCauseWrap" class="nc-form-field nc-wide hidden"><label>พบสาเหตุของผลแรกชัดเจนหรือไม่?</label><div class="nc-inline-choice"><label><input type="radio" name="ncCauseKnown" value="yes" ${workflow.first_fail_cause_known==='yes'?'checked':''} ${editable?'':'disabled'}> พบสาเหตุชัดเจน</label><label><input type="radio" name="ncCauseKnown" value="no" ${workflow.first_fail_cause_known==='no'?'checked':''} ${editable?'':'disabled'}> ยังไม่ทราบสาเหตุ</label></div></div><div id="ncManualConclusionWrap" class="nc-form-field nc-wide hidden"><label>สรุปผลจากการตรวจสอบ</label><select id="ncManualConclusion" ${editable?'':'disabled'}>${enumOptions([['technical_error',NC_VERIFY_TH.technical_error],['confirmed_failure',NC_VERIFY_TH.confirmed_failure]],n.verification_result==='pending'?'':n.verification_result,'เลือกผล')}</select></div><textarea id="ncVerificationNote" class="hidden" aria-hidden="true">${esc(n.verification_note||'')}</textarea><input type="hidden" id="ncVerification" value="${esc(n.verification_result||'pending')}">`);
+    const investigationContent=(investigationStage.match(/<div class="nc-step-content">([\s\S]*)<\/div><\/section>$/)||[])[1]||'';
+    const mergedStep3=step3.replace('</div></section>', investigationContent+'</div></section>');
+    const step4=stepPanel(4,'shield','ประเมินผลกระทบ','','ดูว่าถุงอยู่ที่ไหน ต้องจัดการอย่างไร และมีผลต่อถุงอื่นหรือผู้ป่วยหรือไม่',`<div class="nc-form-grid"><div class="nc-form-field"><label>สถานะถุงเมื่อพบผล</label><select id="ncProductStatus" ${editable?'':'disabled'}>${enumOptions([['in_stock','ยังอยู่ในคลัง'],['issued_not_transfused','จ่ายออกแล้ว แต่ยังไม่ให้ผู้ป่วย'],['transfused','ให้ผู้ป่วยแล้ว'],['destroyed','ทำลายแล้ว'],['unknown','ยังไม่ทราบ']],n.product_status,'เลือกสถานะถุง')}</select></div><div class="nc-form-field"><label>จัดการถุงอย่างไร</label><select id="ncDisposition" ${editable?'':'disabled'}>${enumOptions([['quarantine','กักกัน / งดจ่าย'],['destroy','ทำลาย'],['release_with_approval','ปล่อยใช้ตามการอนุมัติ'],['notify_clinical','แจ้งหน่วยรักษา / ผู้เกี่ยวข้อง'],['no_action','ไม่ต้องดำเนินการกับผลิตภัณฑ์'],['other','อื่น ๆ']],n.disposition,'เลือกการจัดการ')}</select></div><div class="nc-form-field nc-wide"><label>รายละเอียดการจัดการ</label><textarea id="ncDispositionNote" ${editable?'':'disabled'} placeholder="อธิบายว่าทำอะไรกับถุงนี้บ้าง">${esc(n.disposition_note||'')}</textarea></div><div class="nc-form-field nc-wide"><label>ขอบเขตผลกระทบ <small>Scope assessment</small></label><textarea id="ncScope" ${editable?'':'disabled'} placeholder="เช่น เฉพาะถุงนี้ / วันผลิตเดียวกัน / lot เดียวกัน / เครื่องเดียวกัน / ผู้ปฏิบัติงานเดียวกัน">${esc(n.scope_assessment||'')}</textarea></div><div class="nc-form-field"><label>การแจ้งผู้เกี่ยวข้อง</label><select id="ncNotification" ${editable?'':'disabled'}>${enumOptions([['not_required','ไม่จำเป็น'],['required_pending','ต้องแจ้ง / รอดำเนินการ'],['completed','แจ้งแล้ว']],n.notification_status,'เลือกสถานะการแจ้ง')}</select></div><div class="nc-form-field"><label>บันทึกการแจ้ง</label><input id="ncNotificationNote" ${editable?'':'disabled'} value="${esc(n.notification_note||'')}" placeholder="หน่วยหรือบุคคลที่แจ้ง / วันที่แจ้ง"></div></div>${ncEvidenceUploaderHtml('other',evidence,editable,'หลักฐานการจัดการผลิตภัณฑ์')}`);
+
+    const step6=stepPanel(6,'wrench','ต้องทำ Corrective Action เพิ่มหรือไม่?','','เลือกตามสาเหตุ ความรุนแรง และโอกาสเกิดซ้ำ',`<div class="nc-repeat-choice"><label class="nc-choice-card"><input type="radio" name="ncCapaRequired" value="yes" ${workflow.capa_required==='yes'?'checked':''} ${editable?'':'disabled'}><span><b>จำเป็นต้องทำ</b><small>มีความเสี่ยงเกิดซ้ำ / กระทบกระบวนการ / ต้องแก้ระบบ</small></span></label><label class="nc-choice-card"><input type="radio" name="ncCapaRequired" value="no" ${workflow.capa_required==='no'?'checked':''} ${editable?'':'disabled'}><span><b>ไม่จำเป็น</b><small>เหตุการณ์เฉพาะครั้ง ควบคุมได้ และมีเหตุผลรองรับ</small></span></label></div><div id="ncCapaYesWrap" class="nc-form-grid ${workflow.capa_required==='yes'?'':'hidden'}"><div class="nc-form-field nc-wide"><label>แผนแก้ไขป้องกันซ้ำ <small>Corrective Action</small></label><textarea id="ncCorrectiveAction" ${editable?'':'disabled'} placeholder="เช่น ปรับ WI, retrain, PM/สอบเทียบ, เปลี่ยน lot, เพิ่ม checkpoint">${esc(n.corrective_action||'')}</textarea></div><div class="nc-form-field"><label>ผู้รับผิดชอบ</label><select id="ncResponsible" ${editable?'':'disabled'}>${profileOptions(n.responsible_by)}</select></div><div class="nc-form-field"><label>กำหนดเสร็จ</label><input id="ncDueDate" type="date" ${editable?'':'disabled'} value="${esc(n.due_date||'')}"></div></div><div id="ncCapaNoWrap" class="nc-form-field nc-wide ${workflow.capa_required==='no'?'':'hidden'}"><label>เหตุผลที่ไม่เปิด Corrective Action</label><textarea id="ncCapaNoReason" ${editable?'':'disabled'} placeholder="ระบุเหตุผล เช่น เป็น technical error เฉพาะครั้ง แก้ไขแล้ว และไม่พบผลกระทบอื่น">${esc(workflow.capa_not_required_reason||'')}</textarea></div>${ncEvidenceUploaderHtml('corrective_action',evidence,editable,'หลักฐานการแก้ไข')}`);
+    const step7=stepPanel(7,'activity','ติดตามผล','Effectiveness',workflow.capa_required==='yes'?'ติดตามว่าการแก้ไขป้องกันซ้ำได้ผลจริงหรือไม่':'ขั้นนี้จะข้ามได้ เมื่อสรุปว่าไม่จำเป็นต้องทำ Corrective Action',`<div id="ncEffectNeededWrap" class="${workflow.capa_required==='yes'?'':'hidden'}"><div class="nc-form-grid"><div class="nc-form-field nc-wide"><label>วิธีติดตามผล</label><textarea id="ncEffectMethod" ${editable?'':'disabled'} placeholder="เช่น ติดตาม QC ถัดไป 3 ครั้ง / ติดตาม 1 เดือน / audit การปฏิบัติตาม WI">${esc(n.effectiveness_method||'')}</textarea></div><div class="nc-form-field"><label>กำหนดติดตาม</label><input id="ncEffectDue" type="date" ${editable?'':'disabled'} value="${esc(n.effectiveness_due_date||'')}"></div><div class="nc-form-field"><label>ผลการติดตาม</label><select id="ncEffectResult" ${editable?'':'disabled'}>${enumOptions([['pending',NC_EFFECT_TH.pending],['effective',NC_EFFECT_TH.effective],['not_effective',NC_EFFECT_TH.not_effective]],n.effectiveness_result||'pending','เลือกผลการติดตาม')}</select></div><div class="nc-form-field nc-wide"><label>รายละเอียดผลติดตาม</label><textarea id="ncEffectNote" ${editable?'':'disabled'} placeholder="บันทึกผลที่พบหลังติดตาม">${esc(n.effectiveness_note||'')}</textarea></div>${n.effectiveness_checked_at?`<div class="nc-form-field nc-wide"><div class="readonly-box">ผู้ตรวจติดตามผล: ${esc(profileName(n.effectiveness_checked_by))} · ${esc(dateTH(n.effectiveness_checked_at))}</div></div>`:''}</div>${ncEvidenceUploaderHtml('effectiveness',evidence,editable,'หลักฐานการติดตามผล')}</div><div id="ncEffectSkipWrap" class="nc-decision-card neutral ${workflow.capa_required==='yes'?'hidden':''}"><h3>ยังไม่ต้องกรอกขั้นนี้</h3><p>ถ้าขั้นก่อนหน้าเลือก “ไม่จำเป็นต้องทำ Corrective Action” ระบบจะข้ามไปสรุปปิดเคส</p></div>`);
+    const step8=stepPanel(8,'check','สรุปและปิดเคส','','ทบทวนเส้นทางทั้งหมดก่อนส่งให้ผู้มีสิทธิ์ปิดเคส',`<div id="ncCloseSummary"></div><div class="nc-form-grid"><div class="nc-form-field nc-wide"><label>สรุปก่อนปิดเคส</label><textarea id="ncCloseNote" ${closed||canClose?'':'disabled'} ${closed?'disabled':''} placeholder="สรุปสิ่งที่พบ สิ่งที่ทำ และเหตุผลที่ปิดเคสได้">${esc(n.close_note||'')}</textarea></div>${closed?`<div class="nc-form-field nc-wide"><div class="notice good"><strong>ปิดเคสแล้ว</strong><br>${esc(profileName(n.closed_by))} · ${esc(dateTH(n.closed_at))}${n.close_note?`<br>${esc(n.close_note)}`:''}</div></div>`:''}</div>`);
+    $('#view-nonconformance').innerHTML=`<div class="page-head nc-case-head"><div><div class="breadcrumb"><button class="link-btn" id="ncBackList">QC ไม่ผ่าน / Corrective Action</button><span>›</span><span>${esc(n.nc_no)}</span></div><h1>${esc(n.nc_no)}</h1><p class="muted">${esc(ncModuleTH(n.module))} · ${esc(n.product_no)} · ${esc(n.product_type)}</p></div><div class="actions">${ncStatusBadge(n.status)}<button class="btn" id="ncOpenSource">ดูรายการ QC ต้นฉบับ</button>${adminUi()?'<button class="btn danger-soft" id="ncDeleteCase">ลบรายการ</button>':''}</div></div>
+      <div class="notice warning nc-principle-note"><strong>หลักการสำคัญ:</strong> เก็บผล QC เดิมไว้เสมอ ผล Repeat เป็นข้อมูลเพิ่ม ไม่ใช้แทนผลเดิม</div>
+      <div class="nc-wizard-progress"><div><span>กำลังทำขั้นตอน</span><strong id="ncWizardProgressText">${NC_WIZARD_STEPS.findIndex(x=>x.n===activeStep)+1} / 7 · ${esc(NC_WIZARD_STEPS.find(x=>x.n===activeStep)?.label||'')}</strong></div><div class="nc-progress-track"><span id="ncProgressBar" style="width:${(NC_WIZARD_STEPS.findIndex(x=>x.n===activeStep)+1)/7*100}%"></span></div></div>
+      ${ncStepTabs(activeStep)}
+      <div class="nc-wizard-stage">${step1}${step2}${mergedStep3}${step4}${step6}${step7}${step8}</div>
+      <div class="sticky-actions nc-sticky-actions nc-wizard-actions"><div class="left"><button class="btn" id="ncBackBottom">กลับรายการ NC</button></div><div class="right"><button class="btn" id="ncPrevStep">ย้อนกลับ</button>${editable?'<button class="btn primary" id="ncSave">บันทึก</button>':''}<button class="btn primary" id="ncNextStep">ถัดไป</button>${canClose?'<button class="btn good" id="ncClose">ทบทวนและปิดเคส</button>':''}</div></div>
+      ${adminUi()?`<dialog id="ncDeleteDialog" class="dialog nc-delete-dialog"><div class="dialog-head"><div><h2>ลบ ${esc(n.nc_no)}</h2><p class="muted">ลบออกจากหน้ารายการและตัวชี้วัด โดยยังเก็บประวัติไว้ใน Audit Log</p></div><button type="button" class="icon-btn" id="ncDeleteDialogClose" aria-label="ปิด">×</button></div><div class="nc-delete-dialog-body"><div class="notice warning"><strong>รายการ QC ต้นฉบับจะไม่ถูกลบ</strong><br>การลบนี้มีผลเฉพาะเคส Corrective Action / NC นี้</div><div class="nc-form-field"><label>เหตุผลที่ลบ <span class="required-star">*</span></label><select id="ncDeleteReasonType"><option value="">กรุณาเลือกเหตุผล</option><option value="ข้อมูลทดสอบ">ข้อมูลทดสอบ</option><option value="บันทึกซ้ำ">บันทึกซ้ำ</option><option value="สร้างผิด">สร้างผิด</option><option value="อื่น ๆ">อื่น ๆ</option></select></div><div class="nc-form-field hidden" id="ncDeleteOtherWrap"><label>ระบุเหตุผลอื่น</label><textarea id="ncDeleteReasonOther" placeholder="อธิบายเหตุผลที่ต้องลบรายการ"></textarea></div>${closed?'<div class="nc-form-field"><label>เคสนี้ปิดแล้ว กรุณาพิมพ์ DELETE เพื่อยืนยัน</label><input id="ncDeleteConfirmText" autocomplete="off" placeholder="DELETE"></div>':''}<div class="nc-delete-dialog-actions"><button type="button" class="btn" id="ncDeleteCancel">ยกเลิก</button><button type="button" class="btn danger" id="ncDeleteConfirm">ลบรายการ</button></div></div></dialog>`:''}`;
+    const wf=ncRepeatWorkflow(n.repeat_result);
+    const syncWorkflow=()=>{
+      wf.initial_checks=$$('.nc-initial-check:checked',$('#view-nonconformance')).map(x=>x.value);
+      wf.immediate_note=$('#ncImmediateNote')?.value.trim()||'';
+      wf.repeat_required=$('input[name="ncRepeatRequired"]:checked')?.value||wf.repeat_required||'yes';
+      wf.no_repeat_reason=$('#ncNoRepeatReason')?.value.trim()||'';
+      wf.first_fail_cause_known=$('input[name="ncCauseKnown"]:checked')?.value||wf.first_fail_cause_known||'';
+      wf.capa_required=$('input[name="ncCapaRequired"]:checked')?.value||wf.capa_required||'';
+      wf.capa_not_required_reason=$('#ncCapaNoReason')?.value.trim()||'';
+      const rounds=[];$$('.nc-repeat-round',$('#view-nonconformance')).forEach(card=>{rounds.push({id:card.dataset.roundId||String(Date.now()),param_index:Number($('.nc-repeat-param',card)?.value||0),sample_source:$('.nc-repeat-sample',card)?.value||'same',reason:$('.nc-repeat-reason',card)?.value.trim()||'',measured_at:$('.nc-repeat-time',card)?.value||'',result_value:$('.nc-repeat-value',card)?.value.trim()||'',assessment:$('.nc-repeat-assessment',card)?.value||'',note:$('.nc-repeat-note',card)?.value.trim()||''});});wf.rounds=rounds;
+      if($('#ncRepeatWorkflow'))$('#ncRepeatWorkflow').value=ncRepeatWorkflowString(wf);
+      return wf;
+    };
+    const renderDecisionStep=()=>{
+      const host=$('#ncDecisionHost'),sum=$('#ncRepeatSummaryHost');if(!host||!sum)return;
+      const rounds=wf.rounds||[],latest=rounds.filter(x=>x.assessment).slice(-1)[0]||null;
+      sum.innerHTML=ncRepeatSummaryHtml(wf,params);
+      $('#ncRepeatPassCauseWrap')?.classList.add('hidden');$('#ncManualConclusionWrap')?.classList.add('hidden');
+      if(wf.repeat_required==='no'){
+        host.innerHTML='<div class="nc-decision-card neutral"><h3>ไม่ได้ทำ Repeat</h3><p>ให้สรุปผลจากการตรวจสอบและหลักฐานที่มี</p></div>';$('#ncManualConclusionWrap')?.classList.remove('hidden');return;
+      }
+      if(!latest){host.innerHTML='<div class="nc-decision-card neutral"><h3>ยังไม่มีผล Repeat</h3><p>กลับไปขั้นที่ 2 เพื่อบันทึกผลตรวจซ้ำก่อน</p></div>';return;}
+      if(latest.assessment==='fail'){host.innerHTML='<div class="nc-decision-card fail"><h3>Repeat ยังไม่ผ่าน</h3><p>ระบบจะแนะนำให้สรุปเป็น <b>ยืนยัน QC ไม่ผ่าน (Confirmed failure)</b></p></div>';return;}
+      if(latest.assessment==='pass'){host.innerHTML='<div class="nc-decision-card pass"><h3>Repeat ผ่านเกณฑ์</h3><p>ตอบต่อว่า รู้สาเหตุของผลแรกที่ผิดเกณฑ์ชัดเจนหรือไม่</p></div>';$('#ncRepeatPassCauseWrap')?.classList.remove('hidden');return;}
+      host.innerHTML='<div class="nc-decision-card warn"><h3>ผล Repeat ยังสรุปไม่ได้</h3><p>เพิ่ม Repeat อีกครั้ง หรือเดินหน้าสอบสวนต่อก่อนสรุปเคส</p></div>';
+    };
+    const updateCloseSummary=()=>{const host=$('#ncCloseSummary');if(!host)return;const v=$('#ncVerification')?.value||n.verification_result||'pending';host.innerHTML=`<div class="nc-case-summary"><div><span>ผลการตรวจสอบ</span><b>${esc(NC_VERIFY_TH[v]||v||'รอสรุป')}</b></div><div><span>Corrective Action</span><b>${wf.capa_required==='yes'?'จำเป็นต้องทำ':wf.capa_required==='no'?'ไม่จำเป็น':'ยังไม่ได้เลือก'}</b></div><div><span>หลักฐาน</span><b>${evidence.length} ไฟล์</b></div></div>`;};
+    const repeatRoundCard=(round,i)=>{const idx=Number(round.param_index)||0,p=params[idx]||params[0]||{};const auto=ncEvaluateRepeat(p,round.result_value),assessment=round.assessment||auto||'';return `<article class="nc-repeat-round" data-round-id="${esc(round.id||String(Date.now()+i))}"><div class="nc-repeat-round-head"><div><b>Repeat ครั้งที่ ${i+1}</b><small>${esc(p.name||'ผล QC')}</small></div>${ncRepeatOutcomeBadge(assessment)}${editable?`<button type="button" class="icon-btn nc-repeat-delete" aria-label="ลบผล Repeat">×</button>`:''}</div><div class="nc-repeat-round-grid"><div class="nc-form-field"><label>Parameter ที่ตรวจซ้ำ</label><select class="nc-repeat-param" ${editable?'':'disabled'}>${paramOpts.replace(`value="${idx}"`,`value="${idx}" selected`)}</select></div><div class="nc-form-field"><label>ตัวอย่าง</label><select class="nc-repeat-sample" ${editable?'':'disabled'}><option value="same" ${round.sample_source!=='new'?'selected':''}>ตัวอย่างเดิม</option><option value="new" ${round.sample_source==='new'?'selected':''}>ตัวอย่างใหม่</option></select></div><div class="nc-form-field"><label>วัน-เวลาที่ตรวจ</label><input class="nc-repeat-time" type="datetime-local" value="${esc(round.measured_at||inputFromISO(new Date().toISOString()))}" ${editable?'':'disabled'}></div><div class="nc-form-field"><label>ผลใหม่</label><input class="nc-repeat-value" value="${esc(round.result_value||'')}" ${editable?'':'disabled'} placeholder="กรอกค่าที่ได้"></div><div class="nc-form-field"><label>สรุปผล</label><select class="nc-repeat-assessment" ${editable?'':'disabled'}>${enumOptions([['pass','ผ่านเกณฑ์'],['fail','ยังไม่ผ่าน'],['inconclusive','ยังสรุปไม่ได้']],assessment,'เลือกผล')}</select></div><div class="nc-form-field nc-wide"><label>เหตุผล / หมายเหตุ</label><input class="nc-repeat-reason" value="${esc(round.reason||'')}" ${editable?'':'disabled'} placeholder="เช่น ตรวจยืนยันผลเดิม"><input class="nc-repeat-note" value="${esc(round.note||'')}" ${editable?'':'disabled'} placeholder="หมายเหตุเพิ่มเติม (ถ้ามี)"></div></div></article>`;};
+    const renderRepeatRounds=()=>{const host=$('#ncRepeatRounds');if(!host)return;const rounds=wf.rounds||[];host.innerHTML=rounds.length?rounds.map(repeatRoundCard).join(''):'<div class="nc-repeat-empty">ยังไม่มีผล Repeat · กด “+ เพิ่ม Repeat” เพื่อเริ่มบันทึก</div>';$$('.nc-repeat-delete',host).forEach((b,i)=>b.onclick=()=>{wf.rounds.splice(i,1);renderRepeatRounds();syncWorkflow();renderDecisionStep();});$$('.nc-repeat-param,.nc-repeat-sample,.nc-repeat-time,.nc-repeat-value,.nc-repeat-assessment,.nc-repeat-reason,.nc-repeat-note',host).forEach(el=>el.onchange=()=>{const card=el.closest('.nc-repeat-round'),p=params[Number($('.nc-repeat-param',card)?.value||0)]||params[0]||{},val=$('.nc-repeat-value',card)?.value||'',auto=ncEvaluateRepeat(p,val);if(auto&&el.classList.contains('nc-repeat-value'))$('.nc-repeat-assessment',card).value=auto;syncWorkflow();renderRepeatRounds();renderDecisionStep();});};
+    renderRepeatRounds();syncWorkflow();renderDecisionStep();updateCloseSummary();
+    if($('#ncAddRepeat'))$('#ncAddRepeat').onclick=()=>{syncWorkflow();wf.rounds.push({id:String(Date.now()),param_index:0,sample_source:'same',reason:'ตรวจยืนยันผลเดิม',measured_at:inputFromISO(new Date().toISOString()),result_value:'',assessment:'',note:''});renderRepeatRounds();syncWorkflow();};
+    $$('input[name="ncRepeatRequired"]',$('#view-nonconformance')).forEach(x=>x.onchange=()=>{syncWorkflow();$('#ncRepeatRoundsWrap')?.classList.toggle('hidden',x.value==='no'&&x.checked);$('#ncNoRepeatReasonWrap')?.classList.toggle('hidden',!(x.value==='no'&&x.checked));renderDecisionStep();});
+    $$('input[name="ncCauseKnown"]',$('#view-nonconformance')).forEach(x=>x.onchange=()=>{syncWorkflow();renderDecisionStep();});$$('input[name="ncCapaRequired"]',$('#view-nonconformance')).forEach(x=>x.onchange=()=>{syncWorkflow();const yes=wf.capa_required==='yes';$('#ncCapaYesWrap')?.classList.toggle('hidden',!yes);$('#ncCapaNoWrap')?.classList.toggle('hidden',yes);$('#ncEffectNeededWrap')?.classList.toggle('hidden',!yes);$('#ncEffectSkipWrap')?.classList.toggle('hidden',yes);updateCloseSummary();});
+    ['ncImmediateNote','ncNoRepeatReason','ncCapaNoReason'].forEach(id=>{if($('#'+id))$('#'+id).oninput=syncWorkflow;});
+    $$('[data-nc-upload-target]',$('#view-nonconformance')).forEach(b=>b.onclick=()=>$('#'+b.dataset.ncUploadTarget)?.click());$$('[data-nc-upload-input]',$('#view-nonconformance')).forEach(inp=>inp.onchange=()=>uploadNcEvidence(n.id,inp.id));
+    function setNcWizardStep(step,scroll=true){
+      syncWorkflow();const requested=Number(step)||1;const s=NC_WIZARD_STEPS.some(x=>x.n===requested)?requested:3;state.ncWizardStepById[n.id]=s;
+      $$('.nc-step-panel',$('#view-nonconformance')).forEach(el=>el.classList.toggle('active',Number(el.dataset.ncStepPanel)===s));
+      $$('.nc-wizard-tab',$('#view-nonconformance')).forEach(el=>{const active=Number(el.dataset.ncStepGo)===s;el.classList.toggle('active',active);el.setAttribute('aria-selected',active?'true':'false');});
+      const txt=$('#ncWizardProgressText'),bar=$('#ncProgressBar');if(txt)txt.textContent=`${NC_WIZARD_STEPS.findIndex(x=>x.n===s)+1} / 7 · ${NC_WIZARD_STEPS.find(x=>x.n===s)?.label||''}`;if(bar)bar.style.width=`${(NC_WIZARD_STEPS.findIndex(x=>x.n===s)+1)/7*100}%`;
+      const prev=$('#ncPrevStep'),next=$('#ncNextStep'),close=$('#ncClose');if(prev)prev.disabled=s===1;if(next){next.classList.toggle('hidden',s===8);const labels={1:'เริ่มตรวจสอบ',2:'สรุปผล Repeat',3:'ประเมินผลกระทบ',4:'วางแผนแก้ไข',6:wf.capa_required==='no'?'ไปสรุปปิดเคส':'ติดตามผล',7:'ไปสรุปปิดเคส'};next.textContent=labels[s]||'ถัดไป';}if(close)close.classList.toggle('hidden',s!==8);if(s===3)renderDecisionStep();if(s===8)updateCloseSummary();
+      if(scroll)$('.nc-wizard-progress')?.scrollIntoView({behavior:'smooth',block:'start'});
+    }
+    $('#ncBackList').onclick=$('#ncBackBottom').onclick=()=>{state.currentNonconformanceId=null;renderNonconformancePage();};
+    if($('#ncDeleteCase')){
+      const dlg=$('#ncDeleteDialog'),reasonType=$('#ncDeleteReasonType'),otherWrap=$('#ncDeleteOtherWrap'),other=$('#ncDeleteReasonOther');
+      $('#ncDeleteCase').onclick=()=>{if(!adminUi())return;reasonType.value='';if(other)other.value='';otherWrap?.classList.add('hidden');if($('#ncDeleteConfirmText'))$('#ncDeleteConfirmText').value='';dlg?.showModal();};
+      reasonType.onchange=()=>{const show=reasonType.value==='อื่น ๆ';otherWrap?.classList.toggle('hidden',!show);if(show)other?.focus();};
+      const closeDeleteDialog=()=>{if(dlg?.open)dlg.close();};
+      $('#ncDeleteDialogClose').onclick=closeDeleteDialog;$('#ncDeleteCancel').onclick=closeDeleteDialog;
+      $('#ncDeleteConfirm').onclick=async()=>{
+        const type=reasonType.value;if(!type){showToast('กรุณาเลือกเหตุผลที่ลบรายการ','error');reasonType.focus();return;}
+        const otherText=other?.value.trim()||'';if(type==='อื่น ๆ'&&!otherText){showToast('กรุณาระบุเหตุผลอื่น','error');other?.focus();return;}
+        if(closed&&($('#ncDeleteConfirmText')?.value||'').trim()!=='DELETE'){showToast('กรุณาพิมพ์ DELETE เพื่อยืนยันการลบเคสที่ปิดแล้ว','error');$('#ncDeleteConfirmText')?.focus();return;}
+        const reason=type==='อื่น ๆ'?`อื่น ๆ: ${otherText}`:type;$('#ncDeleteConfirm').disabled=true;
+        try{await adminDeleteNonconformance(n.id,reason);}finally{if($('#ncDeleteConfirm'))$('#ncDeleteConfirm').disabled=false;}
+      };
+    }
+    $('#ncOpenSource').onclick=()=>{if(n.module==='platelet'){state.currentRecordId=n.record_id;location.hash=ROUTES.platelet.record;}else if(n.module==='plasma'){state.currentPlasmaRecordId=n.record_id;location.hash=ROUTES.plasma.record;}else{state.currentRbcRecordId=n.record_id;location.hash=ROUTES.rbc.record;}};
+    $$('.nc-wizard-tab',$('#view-nonconformance')).forEach(b=>b.onclick=()=>setNcWizardStep(b.dataset.ncStepGo));
+    $('#ncPrevStep').onclick=()=>{const cur=state.ncWizardStepById[n.id]||activeStep;setNcWizardStep(NC_WIZARD_STEPS[Math.max(0,NC_WIZARD_STEPS.findIndex(x=>x.n===cur)-1)].n);};
+    $('#ncNextStep').onclick=()=>{const cur=state.ncWizardStepById[n.id]||activeStep;syncWorkflow();
+      if(cur===2){
+        if(wf.repeat_required==='yes'){
+          const rounds=wf.rounds||[];if(!rounds.length){showToast('กรุณาบันทึกผล Repeat อย่างน้อย 1 ครั้ง หรือเลือก “ไม่ทำ Repeat” พร้อมเหตุผล','error');return;}
+          const last=rounds[rounds.length-1];if(!last.result_value||!last.assessment){showToast('กรุณากรอกผลและสรุปผล Repeat ครั้งล่าสุดให้ครบ','error');return;}
+        }else if(!wf.no_repeat_reason){showToast('กรุณาระบุเหตุผลที่ไม่ทำ Repeat','error');return;}
+      }
+      if(cur===3){
+        if($('#ncVerificationNote'))$('#ncVerificationNote').value=$('#ncRootDetail')?.value.trim()||'';
+        let verification=$('#ncVerification')?.value||n.verification_result||'pending';const rounds=wf.rounds||[],last=rounds[rounds.length-1];
+        if(wf.repeat_required==='no'){
+          verification=$('#ncManualConclusion')?.value||verification;if(!verification||verification==='pending'){showToast('กรุณาสรุปผลจากการตรวจสอบก่อน','error');return;}
+        }else if(last?.assessment==='fail')verification='confirmed_failure';
+        else if(last?.assessment==='pass'){
+          if(wf.first_fail_cause_known==='yes')verification='technical_error';
+          else if(wf.first_fail_cause_known==='no'){verification='pending';wf.continue_investigation=true;}
+          else{showToast('กรุณาระบุว่าพบสาเหตุของผลแรกชัดเจนหรือไม่','error');return;}
+        }else if(last?.assessment==='inconclusive'){verification='pending';wf.continue_investigation=true;}
+        else{showToast('ยังไม่มีผล Repeat ที่สรุปได้','error');return;}
+        if(!$('#ncVerificationNote')?.value.trim()){showToast('กรุณาสรุปการตรวจสอบสั้น ๆ ก่อนดำเนินการต่อ','error');$('#ncVerificationNote')?.focus();return;}
+        if($('#ncVerification'))$('#ncVerification').value=verification;syncWorkflow();
+      }
+      if(cur===4){if(!$('#ncProductStatus')?.value||!$('#ncDisposition')?.value){showToast('กรุณาเลือกสถานะถุงและการจัดการผลิตภัณฑ์ก่อน','error');return;}}
+      if(cur===3){
+        if(($('#ncVerification')?.value||n.verification_result||'pending')==='pending'){
+          const v=$('#ncInvestigationConclusion')?.value||'';if(!v){showToast('กรุณาสรุปผลหลังสอบสวนก่อน','error');return;}$('#ncVerification').value=v;
+        }
+        if(!$('#ncRootCause')?.value||!$('#ncRootDetail')?.value.trim()||!$('#ncCorrection')?.value.trim()){showToast('กรุณาระบุหมวดสาเหตุ รายละเอียดสาเหตุ และการแก้ไขเบื้องต้นให้ครบ','error');return;}
+      }
+      if(cur===6){
+        if(!wf.capa_required){showToast('กรุณาเลือกว่าจำเป็นต้องทำ Corrective Action เพิ่มหรือไม่','error');return;}
+        if(wf.capa_required==='no'){
+          if(!wf.capa_not_required_reason){showToast('กรุณาระบุเหตุผลที่ไม่เปิด Corrective Action','error');return;}setNcWizardStep(8);return;
+        }
+        if(!$('#ncCorrectiveAction')?.value.trim()||!$('#ncResponsible')?.value||!$('#ncDueDate')?.value){showToast('กรุณาระบุแผนแก้ไข ผู้รับผิดชอบ และกำหนดเสร็จให้ครบ','error');return;}
+      }
+      if(cur===7){
+        if(wf.capa_required!=='yes'){setNcWizardStep(8);return;}
+        const method=$('#ncEffectMethod')?.value.trim(),due=$('#ncEffectDue')?.value,result=$('#ncEffectResult')?.value||'pending';
+        if(!method||!due||result==='pending'){showToast('กรุณาระบุวิธีติดตาม กำหนดติดตาม และผลการติดตามให้ครบ','error');return;}
+        if(result==='not_effective'){showToast('Corrective Action ยังไม่ได้ผล กรุณากลับไปทบทวนสาเหตุและแผนแก้ไข','error');setNcWizardStep(3);return;}
+      }
+      setNcWizardStep(NC_WIZARD_STEPS[Math.min(NC_WIZARD_STEPS.length-1,NC_WIZARD_STEPS.findIndex(x=>x.n===cur)+1)].n);
+    };
+    if($('#ncSave'))$('#ncSave').onclick=()=>{syncWorkflow();saveNonconformance(n.id,state.ncWizardStepById[n.id]||activeStep);};if($('#ncClose'))$('#ncClose').onclick=()=>{syncWorkflow();closeNonconformance(n.id);};
+    $$('.nc-ev-view').forEach(b=>b.onclick=()=>viewNcEvidence(b.dataset.id));$$('.nc-ev-delete').forEach(b=>b.onclick=()=>deleteNcEvidence(b.dataset.id));
+    setNcWizardStep(activeStep,false);
+  }
+  function collectNonconformanceForm(n){
+    const workflowText=$('#ncRepeatWorkflow')?.value||n.repeat_result||null,workflow=ncRepeatWorkflow(workflowText);
+    let verification=$('#ncVerification')?.value||n.verification_result||'pending';
+    if(verification==='pending'&&$('#ncInvestigationConclusion')?.value)verification=$('#ncInvestigationConclusion').value;
+    const effect=$('#ncEffectResult')?.value||n.effectiveness_result||'pending';
+    let status='pending_verification';
+    if(workflow.capa_required==='yes'&&$('#ncCorrectiveAction')?.value.trim())status=effect==='pending'?'capa_in_progress':'effectiveness_monitoring';
+    else if(verification==='technical_error')status='technical_error';
+    else if(verification==='confirmed_failure')status='confirmed_failure';
+    return {verification_result:verification,verification_note:$('#ncVerificationNote')?.value.trim()||n.verification_note||null,repeat_result:workflowText,product_status:$('#ncProductStatus')?.value||n.product_status||null,disposition:$('#ncDisposition')?.value||n.disposition||null,disposition_note:$('#ncDispositionNote')?.value.trim()||n.disposition_note||null,scope_assessment:$('#ncScope')?.value.trim()||n.scope_assessment||null,notification_status:$('#ncNotification')?.value||n.notification_status||null,notification_note:$('#ncNotificationNote')?.value.trim()||n.notification_note||null,root_cause_category:$('#ncRootCause')?.value||n.root_cause_category||null,root_cause_detail:$('#ncRootDetail')?.value.trim()||n.root_cause_detail||null,immediate_correction:$('#ncCorrection')?.value.trim()||n.immediate_correction||null,corrective_action:workflow.capa_required==='yes'?($('#ncCorrectiveAction')?.value.trim()||n.corrective_action||null):null,responsible_by:workflow.capa_required==='yes'?($('#ncResponsible')?.value||n.responsible_by||null):null,due_date:workflow.capa_required==='yes'?($('#ncDueDate')?.value||n.due_date||null):null,effectiveness_method:workflow.capa_required==='yes'?($('#ncEffectMethod')?.value.trim()||n.effectiveness_method||null):null,effectiveness_due_date:workflow.capa_required==='yes'?($('#ncEffectDue')?.value||n.effectiveness_due_date||null):null,effectiveness_result:workflow.capa_required==='yes'?effect:'pending',effectiveness_note:workflow.capa_required==='yes'?($('#ncEffectNote')?.value.trim()||n.effectiveness_note||null):null,close_note:$('#ncCloseNote')?.value.trim()||n.close_note||null,status};
+  }
+  async function saveNonconformance(id,keepStep=null){
+    const n=state.nonconformances.find(x=>x.id===id);if(!n)return;
+    if(keepStep)state.ncWizardStepById[id]=Number(keepStep);
+    try{const payload=collectNonconformanceForm(n);const {error}=await state.sb.from('qc_nonconformances').update(payload).eq('id',id);if(error)throw error;await logActivity('update','nonconformance',id,{nc_no:n.nc_no,status:payload.status,verification_result:payload.verification_result});await reloadNonconformanceData();state.currentNonconformanceId=id;renderNonconformancePage();showToast('บันทึกข้อมูลแล้ว','good');}catch(e){showToast(errText(e),'error');}
+  }
+  async function closeNonconformance(id){
+    const n=state.nonconformances.find(x=>x.id===id);if(!n||!(adminUi()||reviewerUi()))return;
+    const payload=collectNonconformanceForm(n),workflow=ncRepeatWorkflow(payload.repeat_result);
+    if(payload.verification_result==='pending'){showToast('ยังสรุปผลการตรวจสอบไม่ได้ กรุณาสอบสวนต่อก่อนปิดเคส','error');return;}
+    if(!payload.product_status||!payload.disposition){showToast('กรุณาประเมินสถานะและการจัดการผลิตภัณฑ์ก่อนปิดเคส','error');return;}
+    if(!payload.root_cause_category||!payload.root_cause_detail||!payload.immediate_correction){showToast('กรุณาระบุสาเหตุ (Root cause) และการแก้ไขเบื้องต้น (Correction) ให้ครบ','error');return;}
+    if(!workflow.capa_required){showToast('กรุณาสรุปว่าจำเป็นต้องทำ Corrective Action เพิ่มหรือไม่','error');return;}
+    if(workflow.capa_required==='yes'){
+      if(!payload.corrective_action||!payload.responsible_by||!payload.due_date){showToast('กรุณาระบุ Corrective Action ผู้รับผิดชอบ และกำหนดเสร็จให้ครบ','error');return;}
+      if(!payload.effectiveness_method||payload.effectiveness_result!=='effective'){showToast('ปิดเคสได้เมื่อมีวิธีติดตามผล และผล Effectiveness = ได้ผล','error');return;}
+    }else if(!workflow.capa_not_required_reason){showToast('กรุณาระบุเหตุผลที่ไม่จำเป็นต้องทำ Corrective Action','error');return;}
+    if(!payload.close_note){showToast('กรุณาระบุสรุปก่อนปิดเคส','error');$('#ncCloseNote')?.focus();return;}
+    if(!await qcConfirmCentered(`ยืนยันปิด ${n.nc_no} ?`,{title:'ปิดเคส QC ไม่ผ่าน',acceptText:'ปิดเคส'}))return;
+    try{const {error}=await state.sb.from('qc_nonconformances').update({...payload,status:'closed'}).eq('id',id);if(error)throw error;await logActivity('close','nonconformance',id,{nc_no:n.nc_no,verification_result:payload.verification_result,capa_required:workflow.capa_required});await reloadNonconformanceData();state.currentNonconformanceId=id;renderNonconformancePage();showToast('ปิดเคส QC ไม่ผ่านแล้ว','good');}catch(e){showToast(errText(e),'error');}
+  }
+  async function adminDeleteNonconformance(id,reason){
+    if(!adminUi())return;
+    const n=state.nonconformances.find(x=>x.id===id);if(!n)return;
+    const cleanReason=String(reason||'').trim();if(!cleanReason){showToast('กรุณาระบุเหตุผลที่ลบรายการ','error');return;}
+    try{
+      const deletedAt=new Date().toISOString();
+      const {error}=await state.sb.from('qc_nonconformances').update({deleted_at:deletedAt,deleted_by:state.user.id,delete_reason:cleanReason}).eq('id',id);
+      if(error)throw error;
+      await logActivity('delete','nonconformance',id,{nc_no:n.nc_no,module:n.module,record_id:n.record_id,reason:cleanReason,soft_delete:true});
+      state.currentNonconformanceId=null;delete state.ncWizardStepById[id];await reloadNonconformanceData();
+      // Preserve an immediate local tombstone so the candidate cannot flash back into the queue.
+      if(!deletedNcByRecord(n.module,n.record_id))state.ncTombstones.push({module:n.module,record_id:n.record_id,nc_no:n.nc_no});
+      renderNonconformancePage();showToast(`ลบ ${n.nc_no} แล้ว และเก็บประวัติไว้ใน Audit Log`,'good');
+    }catch(e){showToast(errText(e),'error');throw e;}
+  }
+
+  async function uploadNcEvidence(ncId,inputId){
+    const input=$('#'+inputId),files=Array.from(input?.files||[]);if(!files.length)return;
+    const tooBig=files.find(f=>f.size>10*1024*1024);if(tooBig){showToast(`${tooBig.name}: ไฟล์ต้องไม่เกิน 10 MB`,'error');input.value='';return;}
+    const category=input?.dataset?.category||$('#ncEvidenceCategory')?.value||'other';
+    try{let uploaded=0;for(let i=0;i<files.length;i++){const file=files[i],pf=await optimizeEvidenceFile(file),clean=pf.uploadName,path=`nonconformance/${ncId}/${category}/${Date.now()}_${i}_${clean}`;const {error:u}=await state.sb.storage.from('bloodqc-evidence').upload(path,pf.body,{upsert:false,contentType:pf.mime||undefined});if(u)throw u;const {data,error}=await state.sb.from('qc_nonconformance_evidence').insert({nonconformance_id:ncId,category,storage_path:path,original_name:file.name,mime_type:pf.mime,file_size:pf.body.size,uploaded_by:state.user.id}).select('*').single();if(error){await state.sb.storage.from('bloodqc-evidence').remove([path]);throw error;}uploaded++;await logActivity('insert','nonconformance_evidence',data.id,{nonconformance_id:ncId,category});}input.value='';await reloadNonconformanceData();state.currentNonconformanceId=ncId;renderNonconformancePage();showToast(uploaded>1?`แนบหลักฐานแล้ว ${uploaded} ไฟล์`:'แนบหลักฐานแล้ว','good');}catch(e){showToast(errText(e),'error');}
+  }
+  async function viewNcEvidence(id){const e=state.nonconformanceEvidence.find(x=>x.id===id);if(!e)return;const {data,error}=await state.sb.storage.from('bloodqc-evidence').createSignedUrl(e.storage_path,120);if(error)showToast(errText(error),'error');else window.open(data.signedUrl,'_blank','noopener');}
+  async function deleteNcEvidence(id){const e=state.nonconformanceEvidence.find(x=>x.id===id);if(!e)return;if(!await qcConfirmCentered(`ลบหลักฐาน ${e.original_name} ?`,{title:'ลบหลักฐาน',acceptText:'ลบ',acceptClass:'danger'}))return;try{const {error:s}=await state.sb.storage.from('bloodqc-evidence').remove([e.storage_path]);if(s)throw s;const {error}=await state.sb.from('qc_nonconformance_evidence').delete().eq('id',id);if(error)throw error;await reloadNonconformanceData();renderNonconformancePage();showToast('ลบหลักฐานแล้ว','good');}catch(e2){showToast(errText(e2),'error');}}
+
+  function pendingReviewRecords(){
+    const rows=state.records.filter(r=>!r.deleted_at && r.record_purpose==='qc' && r.status==='submitted').map(r=>({module:'platelet',record:r}));
+    if(state.plasmaReady) rows.push(...state.plasmaRecords.filter(r=>!r.deleted_at&&r.status==='submitted').map(r=>({module:'plasma',record:r})));
+    if(state.rbcReady) rows.push(...state.rbcRecords.filter(r=>!r.deleted_at&&r.status==='submitted').map(r=>({module:'rbc',record:r})));
+    return rows.sort((a,b)=>new Date(a.record.submitted_at||0)-new Date(b.record.submitted_at||0));
+  }
+
+  function renderReviewQueue(){
+    if(!reviewerUi()){ location.hash=ROUTES.home; return; }
+    const rows=pendingReviewRecords();
+    $('#view-review').innerHTML=`
+      <div class="page-head"><div><h1>งานรอตรวจทวน</h1><p class="muted">Platelet · Plasma · RBC</p></div><div class="actions"><span class="badge submitted">${rows.length} รายการ</span></div></div>
+      ${doctorTestMode()?`<div class="review-test-banner"><strong>โหมดแพทย์ทดสอบ</strong><span>มุมมองและปุ่มเหมือน Reviewer จริง หากกด “อนุมัติและ LOCK” หรือ “ส่งกลับแก้ไข” ระบบจะบันทึกการกระทำจริงเป็นบัญชีของคุณ</span></div>`:''}
+      <div class="panel review-queue-panel">
+        ${rows.length?`<div class="table-wrap"><table class="data-table review-table"><thead><tr><th>Module</th><th>Product No.</th><th>ผลิตภัณฑ์</th><th>ส่งโดย</th><th>เวลาที่ส่ง</th><th>ผล QC</th><th></th></tr></thead><tbody>${rows.map(x=>{const r=x.record;return `<tr><td><span class="badge">${x.module==='plasma'?'Plasma':x.module==='rbc'?'RBC':'Platelet'}</span></td><td><strong>${esc(r.product_no)}</strong></td><td>${esc(r.product_type)}</td><td>${esc(profileName(r.submitted_by))}</td><td class="nowrap">${esc(dateTH(r.submitted_at))}</td><td>${x.module==='plasma'?plasmaQcBadge(r.qc_status):x.module==='rbc'?rbcRecordDecisionBadge(r):(r.record_purpose==='qc'?plateletQcBadge(r):'<span class="muted">–</span>')}</td><td><button class="btn small-btn primary review-open" data-module="${x.module}" data-id="${r.id}">ทบทวน</button></td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty"><strong>ไม่มีรายการรอตรวจทวน</strong></div>'}
+      </div>`;
+    $('#view-review').insertAdjacentHTML('beforeend',`<div class="panel"><h2>คำชี้แจงไม่มีผลิตภัณฑ์ รอแพทย์รับทราบ</h2>${state.plateletWeeklyEvents.filter(e=>!e.reviewed_at&&weeklyEventHasEvidence(e.id)).map(e=>`<p>${esc(e.event_date)} · ${esc(e.product_type)} · ${esc(e.note||'–')} <button class="btn tiny-btn weekly-evidence-view" data-event-id="${esc(e.id)}">ดูหลักฐาน</button></p>`).join('')||'ไม่มีรายการ'}</div>`);$$('.weekly-evidence-view',$('#view-review')).forEach(b=>b.onclick=()=>viewPlateletWeeklyEvidence(b.dataset.eventId));
+    $$('.review-open',$('#view-review')).forEach(b=>b.onclick=()=>b.dataset.module==='plasma'?openPlasmaDetail(b.dataset.id):b.dataset.module==='rbc'?openRbcDetail(b.dataset.id):openDetail(b.dataset.id));
+  }
+
+  // Backlog is derived from persisted records, not a new mutable list.
+  function backlogRefDate(ym,slot,module){return ym+'-'+String(module==='platelet'&&slot===1?1:plateletWeekRange(ym,slot)[0]).padStart(2,'0');}
+  function backlogCanExplain(module,type){return module==='rbc'?rbcUsesFilterDate(type):module==='platelet'&&/^(LDPPC|SDP)(\s|$)/i.test(type);}
+  function backlogToday(){return inputFromISO(new Date().toISOString()).slice(0,10);}
+  function backlogMonths(start,end){const out=[];if(!/^20\d\d-(0[1-9]|1[0-2])$/.test(start||''))return out;let d=new Date(start+'-01T00:00:00Z');while(d.toISOString().slice(0,7)<=end){out.push(d.toISOString().slice(0,7));d.setUTCMonth(d.getUTCMonth()+1);}return out;}
+  function backlogSources(){return [{module:'platelet',rows:state.records,products:activePlateletTrackingProducts(),ready:true},{module:'plasma',rows:state.plasmaRecords,products:activePlasmaProducts(),ready:state.plasmaReady},{module:'rbc',rows:state.rbcRecords,products:activeRbcProducts(),ready:state.rbcReady}].filter(x=>x.ready);}
+  function backlogDate(module,r){return module==='platelet'?plateletDateFromRecord(r):qcRecordTrackingDate(module,r);}
+  function buildBacklog(today=backlogToday()){
+    const jobs=[],starts=[],end=today.slice(0,7),floor="2026-10";
+    for(const src of backlogSources()){
+      const {module,rows,products}=src,live=rows.filter(r=>!r.deleted_at);
+      for(const p of products){const type=p.product_type,typed=live.filter(r=>r.product_type===type),events=state.plateletWeeklyEvents.filter(e=>e.product_type===type&&backlogCanExplain(module,type));
+        const configured=C.QC_BACKLOG_START_BY_PRODUCT?.[type]||C.QC_BACKLOG_START_MONTH||floor;
+        const start=/^20\d\d-(0[1-9]|1[0-2])$/.test(configured)&&configured>floor?configured:floor;starts.push(start);
+        for(const ym of backlogMonths(start,end)){
+          const monthRows=typed.filter(r=>monthKeyFromDateString(backlogDate(module,r))===ym);
+          for(let slot=1;slot<=4;slot++){
+            const ref=backlogRefDate(ym,slot,module);if(ref>today)continue;
+            const deadline=ym+'-'+String(plateletWeekRange(ym,slot)[1]).padStart(2,'0');
+            const wk=module==='platelet'?plateletWeeklySummary(ym,type)[slot-1]:null;
+            const qc=wk?wk.qc:qcRecordsByProductionWeek(ym,monthRows,module).weeks[slot-1].records;
+            const evidence=backlogCanExplain(module,type)?plateletNoPoolInSlot(ym,slot,type):[];
+            const base={module,type,ym,slot,deadline,overdue:today>deadline};
+            if(!qc.length&&!evidence.some(e=>e.reviewed_at)){
+              if(evidence.length)jobs.push({...base,kind:'ack',event:evidence[0],label:'รอแพทย์รับทราบคำชี้แจง'});
+              else jobs.push({...base,kind:'missing',record:wk?.first?.status==='draft'?wk.first:null,label:wk?.first?'มีถุง แต่ยังไม่ได้เลือก QC':'ยังไม่ได้เก็บ QC'});
+            }
+          }
+        }
+      }
+      for(const r of live){
+        const actual=backlogDate(module,r),date=actual||qcDateNormalize(String(r.created_at||r.manufactured_on||'')).slice(0,10),ym=date.slice(0,7);if(!/^20\d\d-\d\d$/.test(ym)||ym<floor||date>today)continue;
+        const slot=actual?(module==='platelet'?plateletTrackingWeekSlot(date):plateletWeekSlot(date)):null,base={module,type:r.product_type,ym,slot,record:r,overdue:false};
+        if(r.status==='submitted'&&(module!=='platelet'||r.record_purpose==='qc')){jobs.push({...base,kind:'review',label:'รอแพทย์ตรวจทวน'});continue;}
+        if(r.status!=='locked'&&module==='rbc'&&rbcUsesFilterDate(r.product_type)&&(!r.filtered_on||rbcAgeDays(r)==null||rbcAgeDays(r)<0)){jobs.push({...base,kind:'result',label:'รอตรวจสอบวันที่เจาะเก็บ / วันที่กรอง'});continue;}
+        if(module==='platelet'){const tasks=plateletMeasurementTasks(r).filter(t=>t.level!=='upcoming');if(tasks.length)jobs.push({...base,kind:'result',label:tasks.map(t=>t.label||t.title||'รอผลตรวจ/pH').join(' · ')});}
+        else if(r.status!=='locked'&&module==='plasma'&&(!r.outlab_batch_id||r.factor_viii_percent==null||r.qc_status==='incomplete'))jobs.push({...base,kind:r.outlab_batch_id&&r.factor_viii_percent==null?'outlab':'result',label:!r.outlab_batch_id?'รอจัดชุดนำส่ง':r.factor_viii_percent==null?'รอผล Factor VIII':'ข้อมูล QC ยังไม่ครบ'});
+        else if(r.status!=='locked'&&module==='rbc'&&rbcEligible(r)&&rbcEffectiveQcStatus(r)==='incomplete')jobs.push({...base,kind:'result',label:'ข้อมูล QC ยังไม่ครบ'});
+        if(!jobs.some(j=>j.record?.id===r.id&&j.module===module&&j.kind!=='missing')&&r.status==='draft'&&(module==='platelet'?r.record_purpose==='qc'&&plateletMeasurementsComplete(r):module==='plasma'?r.factor_viii_percent!=null&&r.qc_status!=='incomplete':rbcEligible(r)&&rbcEffectiveQcStatus(r)!=='incomplete'))jobs.push({...base,kind:'submit',label:'รอส่งแพทย์ตรวจทวน'});
+      }
+    }
+    return {jobs:jobs.map(j=>({...j,party:['ack','review'].includes(j.kind)?'doctor':'staff'})).sort((a,b)=>a.ym.localeCompare(b.ym)||(a.slot||0)-(b.slot||0)||a.type.localeCompare(b.type)),starts:starts.sort()};
+  }
+  function backlogApplyNewContext(module,host){const j=state.backlogNewContext;if(!j||j.module!==module)return;state.backlogNewContext=null;const id={platelet:'product_type',plasma:'plasma_product_type',rbc:'rbc_product_type'}[module],el=$('#'+id);if(el){el.value=j.type;el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('input',{bubbles:true}));}const dateEl=$('#'+({platelet:'collection_at',plasma:'plasma_manufactured_on',rbc:rbcUsesFilterDate(j.type)?'rbc_filtered_on':'rbc_manufactured_on'}[module]));if(dateEl){dateEl.value='';dateEl.dispatchEvent(new Event('change',{bubbles:true}));}if(module==='platelet'){const option=$('input[name="record_purpose"][value="qc"]');if(option){option.checked=true;option.dispatchEvent(new Event('change',{bubbles:true}));}}host.insertAdjacentHTML('afterbegin',`<div class="notice info">งานย้อนหลัง: ${esc(plateletMonthLabel(j.ym))} · ${esc(plateletWeekLabel(j.ym,j.slot))} · ${esc(j.type)} · กรุณากรอกวันที่จริงจากหลักฐาน ห้ามใช้วันที่สมมติ</div>`);}
+  function backlogPartyLabel(j){return j.party==='doctor'?'ค้างที่แพทย์':'ค้างที่เจ้าหน้าที่';}
+  function backlogSplit(jobs){const doctor=jobs.filter(j=>j.party==='doctor').length;return {doctor,staff:jobs.length-doctor};}
+  function backlogSplitText(jobs){const n=backlogSplit(jobs);return `เจ้าหน้าที่ ${n.staff} · แพทย์ ${n.doctor}`;}
+  function backlogAgeText(j){const raw=j.kind==='review'?j.record?.submitted_at:j.kind==='ack'?j.event?.created_at:j.kind==='missing'?j.deadline:j.record?.status==='draft'?j.record?.returned_at:null;if(!raw)return '';const day=String(raw).length>10?inputFromISO(raw).slice(0,10):String(raw);const n=Math.floor((Date.parse(backlogToday())-Date.parse(day))/86400000);return Number.isFinite(n)&&n>=0?` · ${j.kind==='missing'?'เลยกำหนด':j.kind==='ack'?'ตั้งแต่สร้างคำชี้แจง':j.kind==='review'?'ตั้งแต่ส่งแพทย์':'ตั้งแต่ส่งกลับ'} ${n} วัน`:'';}
+  function backlogMonthCounts(jobs){const counts={};for(const j of jobs)counts[j.ym]=(counts[j.ym]||0)+1;return counts;}
+  function updateBacklogBadge(){const el=$('#backlogCount');if(el){const n=buildBacklog().jobs.length;el.textContent=n||'';}}
+  function backlogHomeHtml(){const {jobs,starts}=buildBacklog(),counts=backlogMonthCounts(jobs);return `<div class="panel"><div class="section-title-row"><div><h2>ติดตามงาน QC ค้างทั้งหมด</h2><p class="muted small">รวมเดือนย้อนหลัง · ไม่หายเมื่อเปลี่ยนเดือน</p></div><span class="badge review">${jobs.length} งาน</span></div><div class="actions left-actions"><button class="btn" data-go-route="#/backlog" data-backlog-party="staff">เจ้าหน้าที่ ${backlogSplit(jobs).staff} งาน</button><button class="btn" data-go-route="#/backlog" data-backlog-party="doctor">แพทย์ ${backlogSplit(jobs).doctor} งาน</button></div><div class="actions left-actions">${Object.entries(counts).map(([ym,n])=>`<button class="btn" data-go-route="#/backlog" data-backlog-month="${esc(ym)}">${esc(plateletMonthLabel(ym))} · ${n} งาน (${backlogSplitText(jobs.filter(j=>j.ym===ym))})</button>`).join('')}<button class="btn primary" data-go-route="#/backlog">เปิดงานทั้งหมด</button></div><p class="muted small">เริ่มติดตาม 1 ตุลาคม 2569${!state.plateletWeeklyReady?' · ไม่สามารถโหลดหลักฐานรายสัปดาห์':''}</p></div>`;}
+  async function renderBacklog(refresh=false){
+    const host=$('#view-backlog');if(!host)return;
+    if(refresh){host.innerHTML='<div class="panel">กำลังตรวจสอบงานย้อนหลัง...</div>';try{await Promise.all([loadRecords(),loadPlateletWeeklyData(),reloadPlasmaRecords(),reloadRbcRecords()]);}catch(e){host.innerHTML=`<div class="notice warning">โหลดข้อมูลไม่สำเร็จ: ${esc(errText(e))}</div>`;return;}if(state.currentView!=='backlog')return;}
+    const {jobs,starts}=buildBacklog(),counts=backlogMonthCounts(jobs),f=state.backlogFilter||(state.backlogFilter={month:'',module:'',kind:'',owner:'',party:''});
+    const months=Object.keys(counts);if(f.month&&!months.includes(f.month))f.month='';
+    const selection=jobs.filter(j=>(!f.month||j.ym===f.month)&&(!f.module||j.module===f.module)&&(!f.kind||j.kind===f.kind)&&(!f.party||j.party===f.party));
+    const owner=j=>j.slot?plannedOwnerRow(j.ym,j.slot,j.module,j.type)?.staff_nickname||'': '';
+    const options=(arr,value)=>arr.map(([v,l])=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`).join('');
+    const names=[...new Set(selection.map(owner).filter(Boolean))].sort();
+    const visible=selection.filter(j=>!f.owner||owner(j)===f.owner);
+    host.innerHTML=`<div class="page-head"><div><h1>ติดตามงาน QC ค้างทั้งหมด</h1><p class="muted">${jobs.length} งาน · ${backlogSplitText(jobs)} · ${months.length} เดือน</p></div><div class="actions"><button class="btn" id="backlogRefresh">โหลดใหม่</button><button class="btn" data-go-route="#/nonconformance">Corrective Action</button></div></div><div class="panel"><h2>เดือนที่ยังไม่ครบ</h2><div class="actions left-actions">${months.map(ym=>`<button class="btn backlog-month" data-month="${esc(ym)}">${esc(plateletMonthLabel(ym))} · ${counts[ym]} งาน (${backlogSplitText(jobs.filter(j=>j.ym===ym))})</button>`).join('')||'ไม่พบงานค้างจากข้อมูลที่โหลด'}</div><p class="muted small">เริ่มติดตาม 1 ตุลาคม 2569 · ไม่สร้างงานสัปดาห์อนาคต · ${!state.plateletWeeklyReady?'คำเตือน: โหลดหลักฐานไม่ได้ · ':''}${!state.plasmaReady||!state.rbcReady?'คำเตือน: บางโมดูลโหลดไม่ได้ · ':''}ใช้รายการตามสิทธิ์ฐานข้อมูลของบัญชีนี้</p></div><div class="panel"><div class="form-grid"><div class="field"><label>ฝ่ายที่รับผิดชอบงาน</label><select id="blParty">${options([['','ทุกฝ่าย'],['staff','เจ้าหน้าที่'],['doctor','แพทย์']],f.party||'')}</select></div><div class="field"><label>เดือน</label><select id="blMonth">${options([['','ทุกเดือน'],...months.map(m=>[m,plateletMonthLabel(m)])],f.month)}</select></div><div class="field"><label>ผลิตภัณฑ์</label><select id="blModule">${options([['','ทุกกลุ่ม'],['platelet','Platelet'],['plasma','Plasma'],['rbc','RBC']],f.module)}</select></div><div class="field"><label>สถานะ</label><select id="blKind">${options([['','ทุกสถานะ'],['missing','ยังไม่ได้เก็บ'],['result','รอผล / ข้อมูล'],['outlab','รอผล Outlab'],['submit','รอส่งแพทย์'],['ack','รอแพทย์รับทราบ'],['review','รอแพทย์ตรวจทวน']],f.kind)}</select></div><div class="field"><label>ผู้รับผิดชอบตามแผน</label><select id="blOwner">${options([['','ทุกคน'],...names.map(n=>[n,n])],f.owner)}</select></div></div><p class="muted small">แสดง ${visible.length} งาน · ${selection.filter(j=>j.kind==='missing'&&j.overdue).length} งานเก็บ QC เลยกำหนด</p><div class="platelet-week-popup-list">${visible.map((j,i)=>`<div class="platelet-week-popup-row ${j.kind==='missing'&&j.overdue?'pending':''}"><div><strong>${esc(j.type)} · ${esc(plateletMonthLabel(j.ym))}</strong><small>${j.slot?esc(j.module==='platelet'?plateletTrackingWeekLabel(j.ym,j.slot):plateletWeekLabel(j.ym,j.slot)):'ไม่อยู่ในรอบสัปดาห์'} · ${esc(j.slot?plannedOwnerText(j.ym,j.slot,j.module,j.type):'รอตรวจสอบวันที่')}</small><small>${esc(backlogPartyLabel(j))} · ${esc(j.label)}${esc(j.kind==='missing'&&!j.overdue?'':backlogAgeText(j))}${j.kind==='missing'?(j.overdue?' · เลยกำหนด':' · สัปดาห์นี้'):''}${j.record?' · '+esc(j.record.product_no)+' · ผู้สร้าง '+esc(profileName(j.record.created_by)):''}</small></div><div class="platelet-week-popup-actions">${j.event?`<button class="btn tiny-btn bl-action" data-i="${i}" data-action="evidence">ดูหลักฐาน</button>`:j.record?`<button class="btn tiny-btn bl-action" data-i="${i}" data-action="record">เปิดรายการ</button>`:staffWriteUi()?`<button class="btn tiny-btn bl-action" data-i="${i}" data-action="new">บันทึก QC</button>`:''}${j.kind==='missing'&&!j.record&&staffWriteUi()&&backlogCanExplain(j.module,j.type)?`<button class="btn tiny-btn bl-action" data-i="${i}" data-action="explain">ชี้แจง / แนบหลักฐาน</button>`:''}</div></div>`).join('')||'<div class="empty">ไม่มีงานตามตัวกรอง</div>'}</div></div>`;
+    $('#backlogRefresh').onclick=()=>{state.staffPlannerOwnersByMonth={};state.backlogPlannerLoading=new Set();renderBacklog(true);};for(const [id,key] of [['blParty','party'],['blMonth','month'],['blModule','module'],['blKind','kind'],['blOwner','owner']])$('#'+id).onchange=e=>{f[key]=e.target.value;if(key!=='owner')f.owner='';renderBacklog();};$$('.backlog-month',host).forEach(b=>b.onclick=()=>{f.month=b.dataset.month;f.owner='';renderBacklog();});
+    $$('.bl-action',host).forEach(b=>b.onclick=()=>{const j=visible[Number(b.dataset.i)],action=b.dataset.action;if(action==='evidence')return viewPlateletWeeklyEvidence(j.event.id);if(action==='explain')return openPlateletNoPoolDialog(j.module==='rbc'?j.type:null,backlogRefDate(j.ym,j.slot,j.module),j.module==='platelet'?j.type:null);if(action==='record'&&(j.kind==='review'||j.record.status!=='draft'||!staffWriteUi()))return j.module==='platelet'?openDetail(j.record.id):j.module==='plasma'?openPlasmaDetail(j.record.id):openRbcDetail(j.record.id);const key={platelet:'currentRecordId',plasma:'currentPlasmaRecordId',rbc:'currentRbcRecordId'}[j.module];state[key]=j.record?.id||null;state.backlogNewContext=j.record?null:j;location.hash=ROUTES[j.module].record;});
+    bindRouteButtons(host);updateBacklogBadge();const missing=[...new Set(selection.map(j=>j.ym))].filter(m=>!Array.isArray(state.staffPlannerOwnersByMonth[m])&&!state.backlogPlannerLoading?.has(m));if(missing.length){state.backlogPlannerLoading ||= new Set();for(const m of missing)state.backlogPlannerLoading.add(m);for(const m of missing)await loadStaffPlannerOwners(m);if(state.currentView==='backlog')renderBacklog();}
+  }
+
+  function renderHome(){
+    const rec=state.records.filter(r=>!r.deleted_at);
+    const month=rec.filter(r=>r.collection_at && r.collection_at>=firstOfMonthISO());
+    const qc=month.filter(r=>r.record_purpose==='qc').length;
+    const pendingPlatelet=plateletPendingRows(rec).length;
+    $('#view-home').innerHTML=`
+      <div class="page-head"><div><h1>CNMI Blood Component QC</h1><p class="muted">ระบบบันทึกและควบคุมคุณภาพส่วนประกอบโลหิต</p></div></div>
+      <div class="module-grid">
+        <article class="module-card active-module">
+          <div class="module-card-head"><div><h2>Platelet</h2><p>Preparation & QC</p></div><span class="module-status live">ใช้งานจริง</span></div>
+          <div class="module-stats"><span><strong>${month.length}</strong> รายการเดือนนี้</span><span><strong>${qc}</strong> ใช้เป็น QC</span>${pendingPlatelet?`<button type="button" class="home-pending-link" data-go-route="#/platelet">งานค้าง ${pendingPlatelet} ถุง →</button>`:`<span class="home-all-done">งานค้าง 0</span>`}</div>
+          <div class="module-actions"><button class="btn primary" data-go-route="#/platelet">ภาพรวม</button>${staffWriteUi()?'<button class="btn" data-go-route="#/platelet/new">บันทึก Platelet</button>':''}<button class="btn" data-go-route="#/platelet/records">รายการ</button><button class="btn" data-go-route="#/platelet/guide">คู่มือ</button></div>
+        </article>
+        ${plasmaModuleCard()}
+        ${rbcModuleCard()}
+      </div>
+      ${state.nonconformanceReady?`<div class="panel nc-home-panel"><div class="section-title-row"><div><h2>QC ไม่ผ่าน / Corrective Action</h2><p class="muted small">Platelet · Plasma · RBC ใช้ขั้นตอนเดียวกัน</p></div><span class="badge review">${pendingQcFailures().length+state.nonconformances.filter(n=>n.status!=='closed').length}</span></div><div class="actions left-actions"><button class="btn ${pendingQcFailures().length?'primary':''}" data-go-route="#/nonconformance">เปิดจัดการ QC ไม่ผ่าน</button></div></div>`:''}
+      ${reviewerUi()?`<div class="panel review-home-panel"><div class="section-title-row"><h2>งานรอตรวจทวน</h2><span class="badge submitted">${pendingReviewRecords().length}</span></div><div class="actions left-actions"><button class="btn primary" data-go-route="#/review">เปิดงานรอตรวจทวน</button></div></div>`:''}
+      ${adminUi()?`<div class="panel core-admin-panel"><h2>Admin</h2><div class="actions left-actions"><button class="btn" data-go-route="#/admin/users">ผู้ใช้งานระบบ</button><button class="btn" data-go-route="#/admin/audit">ประวัติการใช้งาน</button></div></div>`:''}`;
+    $('#view-home').insertAdjacentHTML('beforeend',backlogHomeHtml());
+    bindRouteButtons($('#view-home')); updateBacklogBadge();
+  }
+
+  function futureModuleCard(module,label){
+    return `<article class="module-card future-module"><div class="module-card-head"><div><h2>${label}</h2></div><span class="module-status planned">ยังไม่เปิดใช้</span></div></article>`;
+  }
+
+
+  function plasmaModuleCard(){
+    if(!state.plasmaReady) return `<article class="module-card future-module"><div class="module-card-head"><div><h2>Plasma</h2><p>FFP Preparation & QC</p></div><span class="module-status planned">รออัปเกรดฐานข้อมูล</span></div></article>`;
+    const ym=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit'}).format(new Date()).replace('/','-');
+    const month=state.plasmaRecords.filter(r=>!r.deleted_at&&String(r.manufactured_on||'').slice(0,7)===ym);
+    const waiting=state.plasmaRecords.filter(r=>!r.deleted_at&&r.outlab_batch_id&&r.factor_viii_percent==null).length;
+    return `<article class="module-card active-module"><div class="module-card-head"><div><h2>Plasma</h2><p>FFP · Factor VIII QC</p></div><span class="module-status live">ใช้งานจริง</span></div><div class="module-stats"><span><strong>${month.length}</strong> รายการเดือนนี้</span><span><strong>${waiting}</strong> รอผล Factor VIII</span></div><div class="module-actions"><button class="btn primary" data-go-route="#/plasma">ภาพรวม</button>${staffWriteUi()?'<button class="btn" data-go-route="#/plasma/new">บันทึก FFP</button>':''}<button class="btn" data-go-route="#/plasma/records">รายการ</button><button class="btn" data-go-route="#/plasma/guide">คู่มือ</button></div></article>`;
+  }
+
+  function renderPlateletGuide(){
+    $('#view-guide').innerHTML=`
+      <div class="page-head"><div><h1>คู่มือ Platelet</h1><p class="muted">วิธีบันทึกและเก็บ QC ให้ครบ</p></div><div class="actions">${staffWriteUi()?'<button class="btn primary" data-go-route="#/platelet/new">+ บันทึก Platelet</button>':''}</div></div>
+      <div class="notice warning"><strong>ทุกผลต้องมีหลักฐาน:</strong> ถ้ากรอกผล CBC, ADAM หรือ pH ต้องแนบรูปหรือ PDF ของผลส่วนนั้นก่อนบันทึก</div>
+      <div class="guide-grid">
+        <section class="guide-card"><div class="guide-no">1</div><div><h2>เช็ก QC ของแต่ละสัปดาห์</h2><p>Platelet ติดตามแยกตามชนิดผลิตภัณฑ์ เดือนละ 4 สัปดาห์ โดยสัปดาห์ที่ 1 เริ่มวันจันทร์แรกของเดือน และสัปดาห์ที่ 2–4 ไล่ต่อทุก 7 วันให้ตรงกับตารางตำแหน่งใน App Staff Planner</p><p>ถุงแรกของผลิตภัณฑ์แต่ละชนิดในรอบสัปดาห์จะถูกเลือก <strong>ใช้เป็น QC</strong> อัตโนมัติขณะสร้างรายการ หากเคยบันทึกถุงแรกเป็น Prepare ไปแล้ว ให้เปิดถุงเดิมและเปลี่ยนประเภทเป็น QC โดยไม่สร้างรายการซ้ำ</p><div class="guide-callout">ถ้าสัปดาห์นั้นไม่มีการเตรียมผลิตภัณฑ์ ให้กด <strong>ไม่มีผลิตภัณฑ์สัปดาห์นี้</strong> เลือกชนิดผลิตภัณฑ์ และแนบรูปหรือ PDF ที่ยืนยันเหตุผล เช่น ไม่มีผู้บริจาค SDP หรือไม่มีถุงให้ Pool Platelet</div></div></section>
+        <section class="guide-card"><div class="guide-no">2</div><div><h2>กรอกข้อมูลถุง</h2><p>กรอก Product No., ชนิดผลิตภัณฑ์, Group, วัน-เวลาเริ่มเจาะ และเลือกหน่วย g หรือ mL ตามเครื่องที่ใช้</p><div class="guide-callout">เลือก g: ระบบหักน้ำหนักถุงเปล่าและหาร Density · เลือก mL: กรอก Volume สุทธิจากเครื่องได้โดยตรง</div></div></section>
+        <section class="guide-card"><div class="guide-no">3</div><div><h2>LDPPC: กรอก Pool PYI</h2><p>กรอก Unit No. และ PYI จำนวน 3–6 ถุง ระบบรวม Pool PYI ให้</p><div class="guide-rule-row"><span class="guide-rule good">PYI ≥ ${fmt(state.settings.pool_pyi_standard_min,0)} · ปกติ</span><span class="guide-rule warn">${fmt(state.settings.pool_pyi_conditional_min,0)}–${fmt(state.settings.pool_pyi_standard_min-1,0)} · กรณีจำเป็น</span></div><p>ถ้าอยู่ช่วงกรณีจำเป็น ให้ดู Platelet yield เพิ่ม โดยต้องได้ ≥ ${fmt(state.settings.pool_conditional_yield_min,2)} ×10¹¹ cells/unit</p></div></section>
+        <section class="guide-card"><div class="guide-no">4</div><div><h2>กรอกผล CBC, ADAM และ pH</h2><p>แต่ละผลกรอกต่างวันหรือต่างคนได้ ให้ใส่วัน-เวลาที่ตรวจจริงของผลนั้น</p><p>ถ้า pH ไม่ได้วัดในวันหมดอายุ ให้ใส่เหตุผลตามที่ระบบถาม</p></div></section>
+        <section class="guide-card"><div class="guide-no">5</div><div><h2>แนบหลักฐานกับผลแต่ละส่วน</h2><p>CBC, ADAM และ pH มีช่องหลักฐานของตัวเอง ให้แนบรูปหรือ PDF ให้ตรงกับผลที่กรอก</p><div class="guide-callout">ถ้าต้องแก้ผลภายหลัง ให้เก็บหลักฐานเดิมไว้และแนบหลักฐานใหม่เพิ่ม</div></div></section>
+        <section class="guide-card"><div class="guide-no">6</div><div><h2>บันทึกและส่งแพทย์</h2><p><strong>Prepare</strong> บันทึกไว้และกลับมาเติมข้อมูลได้ ส่วนรายการ <strong>ใช้เป็น QC</strong> เมื่อกรอกครบและมีหลักฐานครบ ให้ส่งแพทย์ทบทวน</p><p>ถ้าพบข้อมูลผิดหลัง LOCK ให้แจ้ง Admin พร้อมเหตุผลและหลักฐานที่ถูกต้อง ระบบจะเก็บประวัติการแก้ไว้ให้ตรวจย้อนหลัง</p></div></section>
+        <section class="guide-card"><div class="guide-no">7</div><div><h2>กรณีแบ่ง Platelet ไปจ่าย</h2><p>อย่านำ Yield หรือ Platelet Related ของถุงหลักไปใช้กับส่วนที่แบ่งโดยตรง ให้คำนวณใหม่ตามปริมาตรที่แบ่งจริงทุกครั้ง</p><div class="guide-callout">เข้าเมนู <strong>คำนวณแบ่งจ่าย</strong> เลือกถุงหลัก → ใส่ปริมาตรที่แบ่ง → ระบบคำนวณ Yield และ Platelet Related ของส่วนแบ่งให้</div><div class="actions left-actions" style="margin-top:10px"><button class="btn" data-go-route="#/platelet/split">เปิดตัวคำนวณแบ่งจ่าย</button></div></div></section>
+      </div>
+      <div class="panel guide-terms"><h2>คำที่เจอบ่อย</h2><div class="term-grid"><div><strong>Prepare</strong><span>รายการเตรียมตามปกติ</span></div><div><strong>QC</strong><span>รายการที่ใช้ตรวจคุณภาพ</span></div><div><strong>ร่าง</strong><span>ยังกลับมาเติมหรือแก้ข้อมูลได้</span></div><div><strong>รอแพทย์</strong><span>ส่งให้แพทย์ทบทวนแล้ว</span></div><div><strong>LOCK</strong><span>แพทย์ทบทวนเสร็จแล้ว</span></div></div></div>`;
+    bindRouteButtons($('#view-guide'));
+  }
+
+  function plateletSplitEligibleRecords(){
+    return state.records.filter(r=>!r.deleted_at&&num(r.volume_ml)!==null&&num(r.volume_ml)>0&&num(r.platelet_yield)!==null&&num(r.platelet_yield)>0)
+      .sort((a,b)=>String(b.collection_at||b.created_at||'').localeCompare(String(a.collection_at||a.created_at||'')));
+  }
+  function plateletSplitCalc(sourceVolume,sourceYield,splitVolume){
+    const sv=num(sourceVolume),sy=num(sourceYield),sp=num(splitVolume),factor=num(state.settings?.equivalent_unit_factor);
+    if(sv===null||sv<=0||sy===null||sy<=0||sp===null||sp<=0||sp>=sv)return null;
+    const ratio=sp/sv,splitYield=sy*ratio,remainingVolume=sv-sp,remainingYield=sy-splitYield;
+    return {sourceVolume:sv,sourceYield:sy,splitVolume:sp,ratio,splitYield,splitRelated:factor&&factor>0?splitYield/factor:null,remainingVolume,remainingYield,remainingRelated:factor&&factor>0?remainingYield/factor:null,factor};
+  }
+  function renderPlateletSplitCalculator(){
+    const rows=plateletSplitEligibleRecords();
+    const options=rows.slice(0,1000).map(r=>`<option value="${esc(r.product_no)}">${esc(r.product_type)} · ${fmt(r.volume_ml,2)} mL · Yield ${fmt(r.platelet_yield,3)}</option>`).join('');
+    $('#view-module').innerHTML=`
+      <div class="page-head"><div><div class="breadcrumb"><button class="link-btn" data-go-route="#/platelet">ภาพรวม Platelet</button><span>›</span><span>คำนวณแบ่งจ่าย</span></div><h1>คำนวณ Platelet แบ่งจ่าย</h1><p class="muted">คำนวณ Yield และ Platelet Related ใหม่ตามปริมาตรที่แบ่งจริง</p></div><div class="actions"><button class="btn" data-go-route="#/platelet/guide">ดูคู่มือ</button></div></div>
+      <div class="notice warning split-alert"><strong>สำคัญ:</strong> ห้ามใช้ค่า Yield / Platelet Related ของถุงหลักกับส่วนที่แบ่งโดยตรง</div>
+      <div class="split-calc-layout">
+        <section class="panel split-step-card"><div class="split-step-head"><span class="split-step-no">1</span><div><h2>เลือกถุงหลัก</h2><p>ค้นหาจาก Product No. ในระบบ หรือกรอกค่าถุงหลักเอง</p></div></div>
+          <div class="form-grid split-source-grid">
+            <div class="field span2"><label>Product No. ถุงหลัก</label><input id="splitSourceProduct" list="splitSourceList" placeholder="พิมพ์หรือสแกน Product No."><datalist id="splitSourceList">${options}</datalist></div>
+            <div class="field"><label>Volume ถุงหลัก (mL)</label><input id="splitSourceVolume" type="number" inputmode="decimal" min="0" step="0.01" placeholder="เช่น 294"></div>
+            <div class="field"><label>Yield ถุงหลัก (×10¹¹ cells)</label><input id="splitSourceYield" type="number" inputmode="decimal" min="0" step="0.001" placeholder="เช่น 2.500"></div>
+          </div>
+          <div id="splitSourceHint" class="split-source-hint muted small">ถ้าเลือกรายการที่มีในแอป ระบบจะดึง Volume และ Yield ให้อัตโนมัติ</div>
+        </section>
+        <section class="panel split-step-card"><div class="split-step-head"><span class="split-step-no">2</span><div><h2>ใส่ปริมาตรที่แบ่งจริง</h2><p>ใช้ปริมาตรที่แบ่งไปจ่ายจริง ไม่ใช่ปริมาตรถุงหลัก</p></div></div>
+          <div class="form-grid"><div class="field"><label>ปริมาตรที่แบ่งจ่าย (mL) <span class="required-star">*</span></label><input id="splitVolume" type="number" inputmode="decimal" min="0" step="0.01" placeholder="เช่น 60"></div><div class="field"><label>Product No. ส่วนแบ่ง (ถ้ามี)</label><input id="splitChildProduct" placeholder="กรอกถ้ามีเลขแยก"></div></div>
+          <div id="splitInputError" class="notice danger small hidden"></div>
+        </section>
+        <section class="panel split-result-panel"><div class="split-step-head"><span class="split-step-no result">3</span><div><h2>ผลคำนวณ</h2><p>ระบบคำนวณตามสัดส่วนปริมาตรของถุงหลัก</p></div></div>
+          <div id="splitEmptyResult" class="empty split-empty"><strong>ใส่ข้อมูลด้านบนเพื่อคำนวณ</strong><span>ระบบจะแสดงผลทันที</span></div>
+          <div id="splitResult" class="hidden">
+            <div class="split-primary-result"><div><span>Yield ของส่วนแบ่ง</span><strong id="splitYieldResult">–</strong><small>×10¹¹ cells</small></div><div><span>Platelet Related / Equivalent Units</span><strong id="splitRelatedResult">–</strong><small id="splitFactorText">–</small></div></div>
+            <div class="split-secondary-grid"><div class="split-mini"><span>ปริมาตรถุงหลัก</span><strong id="splitSourceVolumeResult">–</strong></div><div class="split-mini"><span>สัดส่วนที่แบ่ง</span><strong id="splitRatioResult">–</strong></div><div class="split-mini"><span>ปริมาตรคงเหลือ</span><strong id="splitRemainVolumeResult">–</strong></div><div class="split-mini"><span>Yield คงเหลือ</span><strong id="splitRemainYieldResult">–</strong></div></div>
+            <div class="split-formula"><strong>สูตร:</strong> Yield ส่วนแบ่ง = Yield ถุงหลัก × (Volume ที่แบ่ง ÷ Volume ถุงหลัก)</div>
+            <div class="form-grid split-note-grid"><div class="field span2"><label>หมายเหตุ (ถ้ามี)</label><input id="splitNote" placeholder="เช่น แบ่งเพื่อจ่ายผู้ป่วย / ตรวจสอบก่อนนำค่าไปใช้"></div></div>
+            <div class="notice info small split-audit-note"><strong>การบันทึก:</strong> เก็บเป็นประวัติการคำนวณ (Audit log) เท่านั้น ไม่สร้างถุงใหม่และไม่แก้ค่าของถุงหลัก</div>
+            <div class="actions split-actions"><button class="btn" id="splitCopy">คัดลอกผล</button><button class="btn primary" id="splitSave">บันทึกการคำนวณ</button></div>
+            <div id="splitSavedInfo" class="notice good small hidden"></div>
+          </div>
+        </section>
+      </div>`;
+    bindRouteButtons($('#view-module'));
+    const src=$('#splitSourceProduct'),sv=$('#splitSourceVolume'),sy=$('#splitSourceYield'),sp=$('#splitVolume');
+    const findSource=()=>rows.find(r=>String(r.product_no).trim().toLowerCase()===String(src.value||'').trim().toLowerCase())||null;
+    const refreshSource=()=>{const r=findSource();if(r){sv.value=Number(r.volume_ml).toFixed(2);sy.value=Number(r.platelet_yield).toFixed(3);$('#splitSourceHint').innerHTML=`ดึงจากรายการ <strong>${esc(r.product_type)}</strong> · ${esc(dateTH(r.collection_at,false))} · ผู้บันทึก ${esc(profileName(r.created_by))}`;}else{$('#splitSourceHint').textContent='ไม่พบ Product No. นี้ในรายการที่มี Volume และ Yield ครบ สามารถกรอกค่าถุงหลักเองได้';}refresh();};
+    const currentCalc=()=>plateletSplitCalc(sv.value,sy.value,sp.value);
+    const refresh=()=>{
+      const svv=num(sv.value),syy=num(sy.value),spp=num(sp.value),err=$('#splitInputError');
+      let msg='';if(svv!==null&&svv<=0)msg='Volume ถุงหลักต้องมากกว่า 0 mL';else if(syy!==null&&syy<=0)msg='Yield ถุงหลักต้องมากกว่า 0';else if(spp!==null&&spp<=0)msg='ปริมาตรที่แบ่งต้องมากกว่า 0 mL';else if(svv!==null&&spp!==null&&spp>=svv)msg='ปริมาตรที่แบ่งต้องน้อยกว่าปริมาตรถุงหลัก';
+      err.classList.toggle('hidden',!msg);err.textContent=msg;
+      const c=currentCalc();$('#splitEmptyResult').classList.toggle('hidden',!!c);$('#splitResult').classList.toggle('hidden',!c);$('#splitSavedInfo').classList.add('hidden');if(!c)return;
+      $('#splitYieldResult').textContent=fmt(c.splitYield,3);$('#splitRelatedResult').textContent=fmt(c.splitRelated,2);$('#splitFactorText').textContent=c.factor?`คำนวณด้วย factor ${fmt(c.factor,2)} ×10¹¹ cells / U`:'ยังไม่มีค่า factor';$('#splitSourceVolumeResult').textContent=`${fmt(c.sourceVolume,2)} mL`;$('#splitRatioResult').textContent=`${fmt(c.ratio*100,1)}%`;$('#splitRemainVolumeResult').textContent=`${fmt(c.remainingVolume,2)} mL`;$('#splitRemainYieldResult').textContent=`${fmt(c.remainingYield,3)} ×10¹¹`;
+    };
+    src.addEventListener('change',refreshSource);src.addEventListener('blur',()=>{if(src.value.trim())refreshSource();});[sv,sy,sp].forEach(el=>el.addEventListener('input',refresh));
+    $('#splitCopy').onclick=async()=>{const c=currentCalc();if(!c)return;const source=src.value.trim()||'–',child=$('#splitChildProduct').value.trim()||'–';const out=`Platelet แบ่งจ่าย\nถุงหลัก: ${source}\nส่วนแบ่ง: ${child}\nVolume ถุงหลัก: ${fmt(c.sourceVolume,2)} mL\nVolume ที่แบ่ง: ${fmt(c.splitVolume,2)} mL\nYield ส่วนแบ่ง: ${fmt(c.splitYield,3)} ×10¹¹ cells\nPlatelet Related: ${fmt(c.splitRelated,2)} U\nVolume คงเหลือ: ${fmt(c.remainingVolume,2)} mL\nYield คงเหลือ: ${fmt(c.remainingYield,3)} ×10¹¹ cells`;
+      try{await navigator.clipboard.writeText(out);showToast('คัดลอกผลแล้ว','good');}catch(_e){showToast('คัดลอกอัตโนมัติไม่ได้ กรุณาคัดลอกจากหน้าจอ','error');}};
+    $('#splitSave').onclick=async()=>{const c=currentCalc();if(!c){showToast('กรอกข้อมูลให้ครบก่อนบันทึก','error');return;}const sourceRecord=findSource();const sourceNo=src.value.trim()||null,childNo=$('#splitChildProduct').value.trim()||null,note=$('#splitNote').value.trim()||null;
+      try{await logActivity('platelet_split_calculation','platelet_split',sourceRecord?.id||null,{source_product_no:sourceNo,split_product_no:childNo,source_volume_ml:c.sourceVolume,source_yield_x10e11:c.sourceYield,split_volume_ml:c.splitVolume,split_yield_x10e11:c.splitYield,split_related_units:c.splitRelated,remaining_volume_ml:c.remainingVolume,remaining_yield_x10e11:c.remainingYield,equivalent_unit_factor:c.factor,note});const box=$('#splitSavedInfo');box.innerHTML=`บันทึกการคำนวณในประวัติระบบแล้ว · ${esc(profileName(state.user.id))} · ${esc(dateTH(new Date().toISOString()))}`;box.classList.remove('hidden');showToast('บันทึกการคำนวณแล้ว','good');}catch(e){showToast(errText(e),'error');}};
+  }
+
+  function renderModulePlaceholder(module,page='dashboard'){
+    if(module==='platelet'&&page==='split') return renderPlateletSplitCalculator();
+    if(module==='plasma') return renderPlasmaPage(page);
+    if(module==='rbc') return renderRbcPage(page);
+    const meta=MODULE_META[module]||{label:module?.toUpperCase()||'-',title:'Module'};
+    const pageTitle={dashboard:'ภาพรวม',record:'บันทึกใหม่',records:'รายการทั้งหมด',settings:'QC Settings'}[page]||'ภาพรวม';
+    $('#view-module').innerHTML=`
+      <div class="page-head"><div><div class="breadcrumb"><button class="link-btn" data-go-route="#/">Blood Component QC</button><span>›</span><span>${esc(meta.label)}</span></div><h1>${esc(meta.label)} · ${pageTitle}</h1></div><div class="actions"><button class="btn" data-go-route="#/">กลับหน้าหลัก</button></div></div>
+      <div class="panel module-placeholder-panel"><span class="module-status planned">ยังไม่เปิดใช้งาน</span><h2>${esc(meta.label)}</h2></div>`;
+    bindRouteButtons($('#view-module'));
+  }
+
+  function renderDashboard(){
+    const rec=state.records.filter(r=>!r.deleted_at);
+    const ym=state.plateletDashboardMonth||plateletMonthKey();state.plateletDashboardMonth=ym;
+    const month=rec.filter(r=>monthKeyFromDateString(plateletDateFromRecord(r))===ym);
+    const qc=month.filter(r=>r.record_purpose==='qc').length;
+    const submitted=month.filter(r=>r.record_purpose==='qc'&&r.status==='submitted').length;
+    const products=activePlateletTrackingProducts();
+    const productSummaries=products.map(ps=>{const weeks=plateletWeeklySummary(ym,ps.product_type);const complete=weeks.filter(x=>x.complete).length;return {product_type:ps.product_type,weeks,complete,qcWeeks:weeks.filter(x=>x.qc.length).length};});
+    const typesComplete=productSummaries.filter(x=>x.complete>=4).length;
+    const noPool=productSummaries.reduce((n,x)=>n+x.weeks.filter(w=>w.status==='no_pool').length,0);
+    const productCards=productSummaries.map(p=>{const remaining=Math.max(0,4-p.complete);return `<button type="button" class="type-progress-card platelet-progress-card ${p.complete>=4?'complete':''}" data-product-type="${esc(p.product_type)}"><div class="type-progress-head"><div><strong>${esc(p.product_type)}</strong><small>เก็บ QC ${p.weeks.reduce((n,w)=>n+w.qc.length,0)}/4 ถุง · ดำเนินการ ${p.complete}/4 สัปดาห์</small></div><span class="badge ${p.complete>=4?'pass':'incomplete'}">${p.complete>=4?'ดำเนินการครบ':`เหลือ ${remaining}`}</span></div><div class="tracking-bar"><span style="width:${Math.min(100,p.complete/4*100)}%"></span></div></button>`;}).join('');
+    $('#view-dashboard').innerHTML=`
+      <div class="page-head"><div><h1>Platelet</h1></div><div class="actions"><input id="plateletDashMonth" class="month-input" type="month" value="${esc(ym)}"><button class="btn" data-go-route="#/platelet/guide">คู่มือ</button><button class="btn" data-go-route="#/platelet/split">แบ่งจ่าย</button>${staffWriteUi()?'<button class="btn" id="plateletNoPoolBtn">ไม่มีผลิตภัณฑ์</button><button class="btn primary" id="dashNew">+ บันทึก Platelet</button>':''}${reviewerUi()?'<button class="btn" data-go-route="#/review">งานรอตรวจทวน</button>':''}</div></div>
+      <div class="grid cards">
+        ${metric('เดือนนี้',month.length,'ถุง')}${metric('ดำเนินการครบ 4 สัปดาห์',`${typesComplete}/${products.length||0}`,'ชนิด')}${metric('QC จริง',qc,'ถุง')}${metric('งานค้าง',plateletPendingRows(rec).length,'ถุง')}${metric('รอแพทย์',submitted,'ถุง')}
+      </div>
+      <div class="panel qc-tracking-panel"><div class="section-title-row"><div><h2>ความครบถ้วนรายสัปดาห์</h2></div></div><div class="platelet-progress-grid">${productCards||'<div class="empty">ยังไม่มีชนิดผลิตภัณฑ์ที่เปิดใช้งาน</div>'}</div></div>
+      ${plateletReminderPanel(rec)}
+      <div class="panel"><h2>รายการล่าสุด</h2>${recordsTable(rec.slice(0,12))}</div>`;
+    $('#plateletDashMonth').onchange=e=>{state.plateletDashboardMonth=e.target.value||plateletMonthKey();renderDashboard();};
+    if($('#plateletNoPoolBtn'))$('#plateletNoPoolBtn').onclick=()=>openPlateletNoPoolDialog();
+    $$('.platelet-progress-card',$('#view-dashboard')).forEach(b=>b.onclick=()=>openPlateletWeekSummary(b.dataset.productType,ym));
+    if($('#dashNew')) $('#dashNew').onclick=()=>{state.currentRecordId=null;switchView('record');}; bindRouteButtons($('#view-dashboard')); bindRecordLinks($('#view-dashboard'));
+  }
+
+  function plateletMonthLabel(ym){
+    const [y,m]=String(ym||'').split('-').map(Number);if(!y||!m)return ym||'';
+    return new Intl.DateTimeFormat('th-TH',{timeZone:'Asia/Bangkok',month:'long',year:'numeric'}).format(new Date(Date.UTC(y,m-1,1,12,0,0)));
+  }
+
+  function ensureDetailDialogShell(){
+    const dlg=$('#detailDialog');
+    if(!$('#detailTitle',dlg)||!$('#detailSubtitle',dlg)||!$('#detailBody',dlg)) dlg.innerHTML=`<div class="dialog-head"><div><h2 id="detailTitle">รายละเอียด</h2><p id="detailSubtitle" class="muted"></p></div><button class="icon-btn" id="closeDetailBtn" aria-label="ปิด">×</button></div><div id="detailBody"></div>`;
+    const close=$('#closeDetailBtn',dlg);if(close)close.onclick=()=>dlg.close();
+    return dlg;
+  }
+
+  async function openPlateletWeekSummary(productType,ym){
+    const dlg=ensureDetailDialogShell();
+    await loadStaffPlannerOwners(ym);
+    const weeks=plateletWeeklySummary(ym,productType),complete=weeks.filter(w=>w.complete).length;
+    $('#detailTitle').textContent=`Platelet QC · ${productType}`;
+    $('#detailSubtitle').textContent=`${plateletMonthLabel(ym)} · เก็บ QC ${weeks.reduce((n,w)=>n+w.qc.length,0)}/4 ถุง · ดำเนินการ ${complete}/4 สัปดาห์`;
+    $('#detailBody').innerHTML=`<div class="platelet-week-popup-list">${weeks.map(w=>{
+      const label=plateletTrackingWeekLabel(ym,w.slot),owner=plannedOwnerText(ym,w.slot,'platelet',productType);
+      if(w.status==='qc'){
+        const completeQc=w.qc.filter(plateletMeasurementsComplete),review=completeQc.some(r=>plateletEffectiveQcStatus(r)==='review');
+        const badge=completeQc.length===0?'เก็บ QC แล้ว · รอผล/pH':review?'ตรวจครบ · ต้องตรวจสอบ':'ตรวจครบแล้ว';
+        const badgeClass=completeQc.length===0?'draft':review?'review':'pass';
+        return `<div class="platelet-week-popup-row qc"><div><strong>${esc(label)}</strong><small>${esc(owner)} · เก็บ QC ${w.qc.length} รายการ${w.qc[0]?.collection_at?' · ถุง '+esc(w.qc[0].product_no):''}</small></div><span class="badge ${badgeClass}">${esc(badge)}</span></div>`;
+      }
+      if(w.status==='no_pool')return `<div class="platelet-week-popup-row no_pool"><div><strong>${esc(label)}</strong><small>${esc(owner)} · สัปดาห์นี้ไม่มีผลิตภัณฑ์ · ${w.noPool.some(e=>e.reviewed_at)?"แพทย์รับทราบแล้ว":"รอแพทย์รับทราบ"}</small></div><div class="platelet-week-popup-actions"><span class="badge draft">ไม่มีผลิตภัณฑ์</span><button type="button" class="btn tiny-btn weekly-evidence-view" data-event-id="${w.noPool[0].id}">ดูหลักฐาน</button></div></div>`;
+      const first=w.first,canPromote=first&&first.status==='draft'&&staffWriteUi();
+      return `<div class="platelet-week-popup-row pending"><div><strong>${esc(label)}</strong><small>${esc(owner)}${first?` · ถุงแรก ${esc(first.product_no)} ยังไม่ได้เลือกเป็น QC`:' · ยังไม่มีถุงในสัปดาห์นี้'}</small></div><div class="platelet-week-popup-actions"><span class="badge incomplete">ยังไม่ได้เก็บ QC</span>${canPromote?`<button type="button" class="btn tiny-btn platelet-week-first" data-id="${esc(first.id)}">เปิดถุงแรก</button>`:''}${staffWriteUi()&&!first&&backlogCanExplain('platelet',productType)?`<button class="btn tiny-btn platelet-week-explain" data-slot="${w.slot}">ชี้แจง / แนบหลักฐาน</button>`:''}</div></div>`;
+    }).join('')}</div><p class="muted small" style="margin-top:10px">เก็บตัวอย่าง QC กับตรวจผลครบเป็นคนละขั้นตอน · ถุงที่ผลิตก่อนวันจันทร์แรกของเดือนให้นับในสัปดาห์ที่ 1 โดยผู้รับผิดชอบยังยึดตาราง Staff Planner</p><div class="actions platelet-week-popup-footer"><button type="button" class="btn" id="plateletWeekPopupClose">ปิด</button></div>`;
+    $$('.platelet-week-explain',$('#detailBody')).forEach(b=>b.onclick=()=>{dlg.close();openPlateletNoPoolDialog(null,backlogRefDate(ym,Number(b.dataset.slot),'platelet'),productType);});
+    $$('.platelet-week-first',$('#detailBody')).forEach(b=>b.onclick=()=>{dlg.close();state.currentRecordId=b.dataset.id;switchView('record');});
+    $$('.weekly-evidence-view',$('#detailBody')).forEach(b=>b.onclick=()=>viewPlateletWeeklyEvidence(b.dataset.eventId));
+    $('#plateletWeekPopupClose').onclick=()=>$('#detailDialog').close();
+    dlg.showModal();
+  }
+
+  async function viewPlateletWeeklyEvidence(eventId){
+    const rows=state.plateletWeeklyEvidence.filter(x=>x.event_id===eventId);if(!rows.length){showToast('ไม่พบหลักฐาน','error');return;}
+    const event=state.plateletWeeklyEvents.find(e=>e.id===eventId);const dlg=ensureDetailDialogShell();$('#detailTitle').textContent='หลักฐานไม่มีผลิตภัณฑ์สัปดาห์นี้';$('#detailSubtitle').textContent=`${event?.event_date||''} · ${event?.product_type||''} · ${event?.note||''} · ${rows.length} ไฟล์`;
+    $('#detailBody').innerHTML=`<div class="evidence-list">${rows.map(e=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(e.original_name)}</strong><small>${esc(profileName(e.uploaded_by))} · ${esc(dateTH(e.created_at))}</small></span><button type="button" class="btn small-btn weekly-evidence-file" data-id="${e.id}">ดู</button></div>`).join('')}</div><div class="actions platelet-week-popup-footer">${reviewerUi()&&!event?.reviewed_at?'<button type="button" class="btn primary" id="weeklyAcknowledge">แพทย์รับทราบ</button>':''}<button type="button" class="btn" id="weeklyEvidenceClose">ปิด</button></div>`;
+    $$('.weekly-evidence-file',$('#detailBody')).forEach(b=>b.onclick=async()=>{const e=rows.find(x=>x.id===b.dataset.id);if(!e)return;const {data,error}=await state.sb.storage.from('bloodqc-evidence').createSignedUrl(e.storage_path,120);if(error){showToast(errText(error),'error');return;}window.open(data.signedUrl,'_blank','noopener');});
+    $('#weeklyAcknowledge')?.addEventListener('click',async()=>{const {error}=await state.sb.rpc('qc_ack_weekly_event',{p_id:eventId});if(error){showToast(errText(error),'error');return;}await reloadPlateletWeeklyData();dlg.close();showToast('บันทึกแพทย์รับทราบแล้ว','good');if(state.currentView==='backlog')renderBacklog();else if(state.currentView==='home')renderHome();else if(reviewerUi())renderReviewQueue();else renderDashboard();});$('#weeklyEvidenceClose').onclick=()=>dlg.close();if(!dlg.open)dlg.showModal();
+  }
+
+  async function openPlateletNoPoolDialog(rbcType=null,referenceDate=null,plateletType=null){
+    if(!staffWriteUi()||!state.plateletWeeklyReady){showToast('กรุณา Run SQL v5.3.9 ก่อนใช้งานบันทึกไม่มีผลิตภัณฑ์สัปดาห์นี้','error');return;}
+    let selectedFiles=[];
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const dlg=ensureDetailDialogShell();
+    $('#detailTitle').textContent='บันทึกไม่มีผลิตภัณฑ์สัปดาห์นี้';
+    $('#detailSubtitle').textContent='ใช้เมื่อสัปดาห์นั้นไม่มี Pool Platelet หรือไม่มี SDP และต้องมีหลักฐานจาก Ai-LIS';
+    $('#detailBody').innerHTML=`<div class="panel no-pool-dialog-panel"><div class="form-grid"><div class="field"><label class="required">วันที่อ้างอิงในสัปดาห์</label><input id="noPoolDate" type="date" value="${esc(referenceDate||today)}"></div><div class="field"><label class="required">ชนิดผลิตภัณฑ์</label><select id="noPoolProduct"><option value="">เลือก</option>${(rbcType?[{product_type:rbcType}]:activePlateletTrackingProducts()).map(x=>`<option value="${esc(x.product_type)}">${esc(x.product_type)}</option>`).join('')}</select></div><div class="field span2"><label>รายละเอียด / เหตุผล</label><input id="noPoolNote" placeholder="เช่น ไม่มี SDP / ไม่มีถุงให้ Pool Platelet"></div><div class="field span2"><small class="muted">ระบบจะจัดข้อมูลเข้า สัปดาห์ 1–4 ตามรอบวันจันทร์แรกของเดือน เพื่อให้ตรงกับ Staff Planner</small></div></div><div class="measurement-evidence"><div class="measurement-evidence-head"><div><strong>หลักฐานจาก Ai-LIS ว่าไม่มีผลิตภัณฑ์สัปดาห์นี้</strong><small class="evidence-multi-hint">แนบได้หลายไฟล์: รูปภาพ, PDF, XLS, XLSX หรือ CSV</small></div><span class="section-badge required-evidence">บังคับ</span></div><div class="muted small">ใช้ภาพแคปจาก Ai-LIS หรือไฟล์ที่ Export จาก Ai-LIS เพื่อยืนยันว่าไม่มี Pool Platelet / ไม่มี SDP ในสัปดาห์นั้น</div><input class="hidden-file-input" type="file" id="noPoolCamera" accept="image/*" capture="environment"><input class="hidden-file-input" type="file" id="noPoolFile" accept="image/*,application/pdf,.xls,.xlsx,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple><div class="evidence-pick-actions"><button type="button" class="btn primary small-btn" id="noPoolCameraBtn">ถ่ายรูป</button><button type="button" class="btn small-btn" id="noPoolFileBtn">เลือกรูป / Excel / CSV <span class="multi-file-label">หลายไฟล์ได้</span></button></div><div id="noPoolSelected" class="muted small">ยังไม่ได้เลือกหลักฐาน</div></div></div><div class="actions platelet-week-popup-footer"><button class="btn" id="noPoolCancel">ยกเลิก</button><button class="btn primary" id="noPoolSave">บันทึกสถานะนี้</button></div>`;
+    dlg.showModal();
+    if(plateletType){$('#noPoolProduct').value=plateletType;$('#noPoolProduct').disabled=true;}
+    if(referenceDate)$('#noPoolDate').readOnly=true;
+    if(rbcType){$('#noPoolNote').closest('.field').insertAdjacentHTML('beforebegin','<div class="field"><label>เหตุผลหลัก</label><select id="rbcNoReason"><option value="none">ไม่มีการกรอง</option><option value="old">กรองเลือดเกิน 7 วัน</option></select></div><div class="field"><label>Unit No. (บังคับเมื่อกรองเกิน 7 วัน)</label><input id="rbcNoUnit"></div>');$('#noPoolProduct').value=rbcType;$('#noPoolProduct').disabled=true;$('#detailSubtitle').textContent="ไม่มีการกรอง / ไม่มีเลือดอายุ 0–7 วันให้เก็บ QC · ระบุเลข Unit ถ้ามีการกรองเลือดเกิน 7 วัน";}
+    const setFiles=files=>{const incoming=Array.from(files||[]);for(const f of incoming){if(!selectedFiles.some(x=>x.name===f.name&&x.size===f.size&&x.lastModified===f.lastModified))selectedFiles.push(f);}$('#noPoolSelected').innerHTML=selectedFiles.length?`เลือกแล้ว ${selectedFiles.length} ไฟล์<br>${selectedFiles.map(f=>esc(f.name)).join('<br>')}`:'ยังไม่ได้เลือกหลักฐาน';};
+    $('#noPoolCameraBtn').onclick=()=>$('#noPoolCamera').click();$('#noPoolFileBtn').onclick=()=>$('#noPoolFile').click();
+    $('#noPoolCamera').onchange=e=>setFiles(e.target.files);$('#noPoolFile').onchange=e=>setFiles(e.target.files);
+    $('#noPoolCancel').onclick=()=>dlg.close();
+    $('#noPoolSave').onclick=async()=>{
+      if(!qcDateGuard())return;const eventDate=$('#noPoolDate').value,productType=$('#noPoolProduct').value;let note=$('#noPoolNote').value.trim()||null;if(rbcType){const old=$('#rbcNoReason').value==='old',unit=$('#rbcNoUnit').value.trim();if(old&&!unit){showToast('ระบุ Unit No. ที่กรองเกิน 7 วัน','error');return;}if(note)note=(old?'กรองเลือดเกิน 7 วัน · Unit '+unit:'ไม่มีการกรอง')+' · '+note;}
+      if(!eventDate){showToast('กรุณาระบุวันที่อ้างอิงในสัปดาห์','error');return;}if(!productType){showToast('กรุณาเลือกชนิดผลิตภัณฑ์','error');return;}const eventSlot=rbcType?plateletWeekSlot(eventDate):plateletTrackingWeekSlot(eventDate);if(!eventSlot){const ym=eventDate.slice(0,7),[start]=plateletWeekRange(ym,1);showToast(`สัปดาห์ที่ 1 ของเดือนนี้เริ่มวันที่ ${start}/${ym.slice(5,7)} กรุณาเลือกวันที่ตั้งแต่สัปดาห์ที่ 1 เป็นต้นไป`,'error');return;}if(plateletNoPoolInSlot(eventDate.slice(0,7),eventSlot,productType).length){showToast('มีคำชี้แจงในสัปดาห์นี้แล้ว กรุณาเปิดหลักฐานเดิม','error');return;}if(!note){showToast('กรุณาระบุเหตุผล','error');return;}if(!selectedFiles.some(f=>f.type.startsWith('image/')||/\.(png|jpe?g|webp|heic|heif)$/i.test(f.name))){showToast('ต้องแนบภาพจาก Ai-LIS อย่างน้อย 1 รูป','error');return;}const tooBig=selectedFiles.find(f=>f.size>10*1024*1024);if(tooBig){showToast(`${tooBig.name}: ไฟล์ต้องไม่เกิน 10 MB`,'error');return;}
+      try{
+        const {data:event,error:eventErr}=await state.sb.from('platelet_weekly_events').insert({event_date:eventDate,product_type:productType,event_type:'no_pool',note,created_by:state.user.id}).select('*').single();if(eventErr)throw eventErr;
+        const uploadedPaths=[];
+        try{
+          for(let i=0;i<selectedFiles.length;i++){
+            const file=selectedFiles[i],pf=await optimizeEvidenceFile(file),clean=pf.uploadName,path=`platelet_weekly/${event.id}/evidence/${Date.now()}_${i}_${clean}`;
+            const {error:u}=await state.sb.storage.from('bloodqc-evidence').upload(path,pf.body,{upsert:false,contentType:pf.mime||undefined});if(u)throw u;uploadedPaths.push(path);
+            const {error:ferr}=await state.sb.from('platelet_weekly_evidence_files').insert({event_id:event.id,storage_path:path,original_name:file.name,mime_type:pf.mime,file_size:pf.body.size,uploaded_by:state.user.id});if(ferr)throw ferr;
+          }
+        }catch(uploadErr){if(uploadedPaths.length)await state.sb.storage.from('bloodqc-evidence').remove(uploadedPaths);await state.sb.from('platelet_weekly_evidence_files').delete().eq('event_id',event.id);await state.sb.from('platelet_weekly_events').delete().eq('id',event.id);throw uploadErr;}
+        await reloadPlateletWeeklyData();dlg.close();showToast(`บันทึกไม่มีผลิตภัณฑ์สัปดาห์นี้พร้อมหลักฐาน ${selectedFiles.length} ไฟล์แล้ว`,'good');if(state.currentView==='backlog')renderBacklog();else if(state.currentView==='home')renderHome();else if(rbcType)renderRbcDashboard();else renderDashboard();
+      }catch(e){showToast(errText(e),'error');}
+    };
+  }
+
+  function mobilePair(label,value){ return `<div class="mobile-data-pair"><span class="mobile-data-label">${label}</span><div class="mobile-data-value">${value}</div></div>`; }
+  function responsiveDataTable(tableHtml,cardsHtml){ return `<div class="desktop-table-only">${tableHtml}</div><div class="mobile-data-cards">${cardsHtml}</div>`; }
+
+  function metric(label,value,sub){ return `<div class="card metric"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`; }
+  function recordsTable(rows){
+    if(!rows.length) return '<div class="empty">ยังไม่มีข้อมูล</div>';
+    const table=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Product No.</th><th>ผลิตภัณฑ์</th><th>ประเภท</th><th>วันเจาะ</th><th>Group</th><th>Yield</th><th>Residual WBC</th><th>Equivalent Units</th><th>ผลต่าง PLT 2 เครื่อง</th><th>Pool / ฉลาก</th><th>ผล QC</th><th>งานที่ยังขาด</th><th>สถานะ</th><th>ผู้บันทึก</th></tr></thead><tbody>${rows.map(r=>`<tr class="${r.deleted_at?'deleted-row':''}"><td><button class="link-btn record-link" data-id="${r.id}">${esc(r.product_no)}</button>${plateletPhQuickButton(r)}</td><td>${esc(r.product_type)}</td><td>${purposeBadge(r.record_purpose)} ${deletedBadge(r)}</td><td class="nowrap">${dateTH(r.collection_at,false)}</td><td>${esc(r.blood_group||'–')}</td><td>${fmt(r.platelet_yield,2)}</td><td>${r.residual_wbc==null?'–':fmt(r.residual_wbc,3)+' ×10⁶'}</td><td>${fmt(r.equivalent_units,2)}</td><td>${r.plt_repeat_diff_pct==null?'–':fmt(r.plt_repeat_diff_pct,1)+'%'}</td><td>${poolReleaseBadge(r.pool_release_status)}</td><td>${r.record_purpose==='qc'?plateletQcBadge(r):'<span class="muted">–</span>'}</td><td>${plateletTaskSummaryBadge(r)}</td><td>${plateletProgressStatusBadge(r)}</td><td>${esc(profileName(r.created_by))}</td></tr>`).join('')}</tbody></table></div>`;
+    const cards=rows.map(r=>`<article class="mobile-data-card ${r.deleted_at?'deleted-row':''}"><div class="mobile-data-card-head"><button class="link-btn record-link" data-id="${r.id}">${esc(r.product_no)}</button>${plateletPhQuickButton(r)}${r.deleted_at?'<span class="badge deleted">ลบแล้ว</span>':''}</div><div class="mobile-data-card-body">${mobilePair('ผลิตภัณฑ์',esc(r.product_type))}${mobilePair('ผล QC',r.record_purpose==='qc'?plateletQcBadge(r):purposeBadge(r.record_purpose))}${mobilePair('งานที่ยังขาด',plateletTaskSummaryBadge(r))}${mobilePair('สถานะ',plateletProgressStatusBadge(r))}<details class="mobile-record-more"><summary>ข้อมูลเพิ่มเติม</summary><div class="mobile-record-extra">${mobilePair('ประเภท',`${purposeBadge(r.record_purpose)} ${deletedBadge(r)}`)}${mobilePair('วันเจาะ',esc(dateTH(r.collection_at,false)))}${mobilePair('Group',esc(r.blood_group||'–'))}${mobilePair('Yield',fmt(r.platelet_yield,2))}${mobilePair('Residual WBC',r.residual_wbc==null?'–':fmt(r.residual_wbc,3)+' ×10⁶ cells/unit')}${mobilePair('Equivalent Units',fmt(r.equivalent_units,2))}${mobilePair('ผลต่าง PLT 2 เครื่อง',r.plt_repeat_diff_pct==null?'–':fmt(r.plt_repeat_diff_pct,1)+'%')}${mobilePair('Pool / ฉลาก',poolReleaseBadge(r.pool_release_status))}${mobilePair('ผู้บันทึก',esc(profileName(r.created_by)))}</div></details></div></article>`).join('');
+    return responsiveDataTable(table,cards);
+  }
+
+  function plateletCanEnterPh(r){return !!(r&&!r.deleted_at&&r.ph_value==null&&staffWriteUi()&&(r.status==='draft'||adminUi()));}
+  function plateletPhQuickButton(r){return plateletCanEnterPh(r)?` <button type="button" class="btn tiny-btn platelet-ph-quick" data-id="${esc(r.id)}" aria-label="บันทึก pH ${esc(r.product_no)}">บันทึก pH</button>`:'';}
+  function openPlateletPhEntry(id){
+    const r=state.records.find(x=>x.id===id);
+    if(!plateletCanEnterPh(r)){openDetail(id);return;}
+    state.currentRecordId=id;
+    state.scrollToPlateletPh=true;
+    switchView('record');
+  }
+  function bindRecordLinks(root=document){
+    $$('.record-link',root).forEach(b=>b.onclick=()=>openDetail(b.dataset.id));
+    $$('.platelet-ph-quick',root).forEach(b=>b.onclick=()=>openPlateletPhEntry(b.dataset.id));
+  }
+
+  function renderRecordsList(){
+    const deletedControl=adminUi()?`<label class="inline-check"><input type="checkbox" id="fDeleted" ${state.showDeletedRecords?'checked':''}> แสดงรายการที่ลบแล้ว</label>`:'';
+    $('#view-records').innerHTML=`<div class="page-head"><div><h1>รายการ Platelet</h1><p class="muted">รายการ Prepare และ QC</p></div><div class="actions"><button class="btn" id="exportCsv">Export CSV</button>${staffWriteUi()?'<button class="btn primary" id="listNew">+ บันทึก Platelet</button>':''}</div></div>
+      <div class="panel"><div class="filters"><input id="fSearch" placeholder="ค้นหา Product No. / ผลิตภัณฑ์"><select id="fPurpose"><option value="">Prepare + QC</option><option value="prepare">Prepare ตามปกติ</option><option value="qc">ใช้เป็น QC</option></select><select id="fStatus"><option value="">ทุกสถานะ</option><option value="draft">ร่าง</option><option value="submitted">รอตรวจทวน</option><option value="locked">LOCK</option></select><select id="fQc"><option value="">ทุกผล QC</option><option value="pass">ผ่านเกณฑ์ QC</option><option value="review">ต้องตรวจสอบ QC</option><option value="incomplete">ข้อมูล QC ยังไม่ครบ</option></select><select id="fProduct"><option value="">ทุกผลิตภัณฑ์</option>${activeProducts().map(x=>`<option>${esc(x.product_type)}</option>`).join('')}</select><button class="btn" id="fClear">ล้าง</button></div>${deletedControl}<div id="recordsTableHost" style="margin-top:12px"></div></div>`;
+    const apply=()=>{
+      const q=$('#fSearch').value.trim().toLowerCase(),purpose=$('#fPurpose').value,s=$('#fStatus').value,qc=$('#fQc').value,p=$('#fProduct').value;
+      if($('#fDeleted')) state.showDeletedRecords=$('#fDeleted').checked;
+      const rows=state.records.filter(r=>(state.showDeletedRecords||!r.deleted_at)&&(!q||`${r.product_no} ${r.product_type}`.toLowerCase().includes(q))&&(!purpose||(r.record_purpose||'prepare')===purpose)&&(!s||r.status===s)&&(!qc||(r.record_purpose==='qc'&&plateletEffectiveQcStatus(r)===qc))&&(!p||r.product_type===p));
+      $('#recordsTableHost').innerHTML=recordsTable(rows); bindRecordLinks($('#recordsTableHost')); return rows;
+    };
+    ['#fSearch','#fPurpose','#fStatus','#fQc','#fProduct'].forEach(x=>$(x).addEventListener('input',apply)); if($('#fDeleted'))$('#fDeleted').addEventListener('change',apply);
+    $('#fClear').onclick=()=>{['#fSearch','#fPurpose','#fStatus','#fQc','#fProduct'].forEach(x=>$(x).value='');if($('#fDeleted')){$('#fDeleted').checked=false;state.showDeletedRecords=false;}apply();};
+    if($('#listNew')) $('#listNew').onclick=()=>{state.currentRecordId=null;switchView('record');}; $('#exportCsv').onclick=()=>exportCSV(apply()); apply();
+  }
+
+  function exportCSV(rows){
+    const headers=['Product No.','Product','Purpose','Group','Collection','Expiry','Input unit','Original entry value','Gross equivalent g','Bag tare g','Density','Volume mL','Pool PYI','Pool/Label status','PLT instrument','PLT1','PLT2','PLT measured at','PLT used','Yield x10^11','Equivalent Units','WBC ADAM','WBC measured at','Residual WBC x10^6','pH','pH measured','QC result','Status','Revision','Deleted at','Delete reason','Notes'];
+    const vals=r=>[r.product_no,r.product_type,r.record_purpose,r.blood_group,r.collection_at,r.expiry_at,qcVolumeUnit(r.volume_input_unit),qcVolumeOriginal(r,'volume_input_unit','volume_input_value','gross_weight_g','volume_ml').value,r.gross_weight_g,r.bag_tare_weight_g,r.density,r.volume_ml,r.pool_pyi,r.pool_release_status,r.plt_instrument,r.plt_value_1,r.plt_value_2,r.plt_measured_at,r.plt_used,r.platelet_yield,r.equivalent_units,r.wbc_adam,r.wbc_measured_at,r.residual_wbc,r.ph_value,r.ph_measured_at,r.record_purpose==='qc'?plateletEffectiveQcStatus(r):'not_qc',r.status,r.revision,r.deleted_at,r.delete_reason,r.notes];
+    const quote=v=>`"${String(v??'').replaceAll('"','""')}"`; const csv='\ufeff'+[headers,...rows.map(vals)].map(a=>a.map(quote).join(',')).join('\r\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); a.download=`platelet_${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(a.href); logActivity('export_csv','report',null,{rows:rows.length}).catch(()=>{});
+  }
+
+  async function renderRecordForm(){
+    if(!state.currentRecordId && !staffWriteUi()){ location.hash=ROUTES.review; return; }
+    let r=null,pool=[]; state.currentEvidence=[]; state.currentPool=[];
+    if(state.currentRecordId){
+      const {data,error}=await state.sb.from('platelet_records').select('*').eq('id',state.currentRecordId).single(); if(error){showToast(errText(error),'error');return;} r=qcNormalizeRow(data);
+      const {data:pu}=await state.sb.from('pool_units').select('*').eq('record_id',r.id).order('position'); pool=pu||[]; state.currentPool=pool.map(x=>({position:x.position,unit_no:x.unit_no,pyi:Number(x.pyi)}));
+      const {data:ev}=await state.sb.from('evidence_files').select('*').eq('record_id',r.id).order('created_at'); state.currentEvidence=ev||[];
+    }
+    const locked=r?.status==='locked', submitted=r?.status==='submitted', deleted=!!r?.deleted_at;
+    const editable=!deleted && (adminUi() || (!locked && !submitted && staffWriteUi()));
+    const purpose=r?.record_purpose||'prepare';
+    const adminCorrection=r&&adminUi()&&!deleted;
+    $('#view-record').innerHTML=`
+      <div class="page-head"><div><h1>${r?'แก้ไข / ตรวจรายการ Platelet':'บันทึก Platelet'}</h1></div><div class="page-head-tools">${!r&&staffWriteUi()?'<button type="button" class="btn small-btn" id="recordNoPoolBtn">ไม่มีผลิตภัณฑ์สัปดาห์นี้</button>':''}<button type="button" class="btn small-btn" id="recordGuideBtn">คู่มือ</button>${r?`<div class="status-line">${deletedBadge(r)}${plateletProgressStatusBadge(r)}${pHBadge(r)}</div>`:''}</div></div>
+      ${deleted?`<div class="notice bad"><strong>รายการนี้ถูกลบออกจากการใช้งานแล้ว</strong><br>เหตุผล: ${esc(r.delete_reason||'–')} · ${dateTH(r.deleted_at)} · โดย ${esc(profileName(r.deleted_by))}</div>`:''}
+      ${locked&&!adminUi()?'<div class="notice good"><strong>รายการนี้ทบทวนเสร็จสิ้นแล้ว</strong> ข้อมูลถูกป้องกันการแก้ไข หากยังขาด pH ให้แจ้ง Admin เพื่อดำเนินการตามสิทธิ์และเก็บ Audit</div>':''}
+      ${locked&&adminUi()&&!deleted?'<div class="notice warning"><strong>Admin correction</strong> รายการนี้ LOCK แล้ว แต่ Admin สามารถแก้ไขได้โดยระบุเหตุผล ระบบจะเพิ่ม Revision และบันทึกค่าก่อน/หลังใน Audit Log</div>':''}
+      ${r?.status==='draft'&&r?.returned_at&&r?.review_note?`<div class="notice warning"><strong>แพทย์ส่งกลับแก้ไข</strong><br>${esc(r.review_note)}<br><span class="small">${esc(profileName(r.returned_by))} · ${esc(dateTH(r.returned_at))}</span></div>`:''}
+      ${r?.status==='submitted'&&r?.record_purpose==='qc'&&reviewerUi()?`<div class="panel reviewer-action-panel"><div class="section-title-row"><h2>การทบทวนโดยแพทย์</h2><span class="section-badge">Reviewer</span></div><div class="field"><label>หมายเหตุการทบทวน</label><textarea id="review_note" placeholder="ถ้าส่งกลับแก้ไข ต้องระบุเหตุผล; ถ้าอนุมัติจะใส่หมายเหตุหรือเว้นว่างก็ได้">${esc(r.review_note||'')}</textarea></div><div class="actions"><button type="button" class="btn danger" id="returnForCorrection">ส่งกลับแก้ไข</button><button type="button" class="btn good" id="approveAndLock">อนุมัติและ LOCK</button></div></div>`:''}
+      <form id="recordForm">
+      ${r&&r.status==='draft'&&r.record_purpose==='prepare'&&!plateletQcInSlot(monthKeyFromDateString(plateletDateFromRecord(r)),plateletTrackingWeekSlot(plateletDateFromRecord(r)),r.id,r.product_type).length&&plateletFirstRecordInSlot(monthKeyFromDateString(plateletDateFromRecord(r)),plateletTrackingWeekSlot(plateletDateFromRecord(r)),r.product_type)?.id===r.id?'<div class="notice warning">ถุงนี้เป็นถุงแรกของรอบสัปดาห์ และยังไม่มี QC ในรอบนี้ กรุณาเลือก “ใช้เป็น QC” ก่อนส่งแพทย์ (หากมีเหตุยกเว้นให้ดำเนินการตาม SOP) <button type="button" class="btn tiny-btn" id="plateletMakeFirstQc" style="margin-left:8px">เลือกถุงนี้เป็น QC</button></div>':''}
+      <div class="panel purpose-panel"><h2>1. ประเภทรายการ</h2><div class="purpose-selector" role="radiogroup" aria-label="ประเภทการบันทึก"><label class="purpose-option ${purpose==='prepare'?'selected':''}"><input type="radio" name="record_purpose" value="prepare" ${purpose==='prepare'?'checked':''} ${editable?'':'disabled'}><span><strong>Prepare</strong><small>ค่าเริ่มต้น</small></span></label><label class="purpose-option ${purpose==='qc'?'selected':''}"><input type="radio" name="record_purpose" value="qc" ${purpose==='qc'?'checked':''} ${editable?'':'disabled'}><span><strong>ใช้เป็น QC</strong></span></label></div></div>
+      ${adminCorrection?`<div class="panel admin-correction-panel"><div class="section-title-row"><h2>การแก้ไขโดย Admin</h2><span class="section-badge warning">เก็บก่อน–หลังใน Audit Log</span></div><div class="field"><label>เหตุผลการแก้ไขโดย Admin</label><textarea id="admin_edit_reason" placeholder="เช่น เจ้าหน้าที่แจ้งผลผิด ตรวจหลักฐานใหม่แล้วแก้ไข"></textarea></div></div>`:''}
+      <div class="panel"><h2>2. ข้อมูลผลิตภัณฑ์</h2><div id="plateletPlannerOwnerHint" class="planner-owner-hint"><span>ผู้รับผิดชอบตาม Staff Planner</span><strong>เลือกผลิตภัณฑ์และวันที่ก่อน</strong><small>ระบบจะดึงชื่อประจำสัปดาห์ให้อัตโนมัติ</small></div><div class="form-grid">
+        ${field('Product No.','product_no',r?.product_no,'text',false,'','required')}
+        <div class="field"><label class="required">ผลิตภัณฑ์</label><select id="product_type" ${editable?'':'disabled'}><option value="">เลือก</option>${productOptions(r?.product_type)}${r?.product_type&&!productSetting(r.product_type)?`<option value="${esc(r.product_type)}" selected>${esc(r.product_type)} (ข้อมูลเดิม)</option>`:''}</select></div>
+        <div class="field"><label>Group</label><select id="blood_group" ${editable?'':'disabled'}><option value="">เลือก</option>${['O','A','B','AB'].map(x=>`<option ${r?.blood_group===x?'selected':''}>${x}</option>`).join('')}</select></div>
+        ${field('วัน-เวลาเริ่มเจาะถุงที่ 1','collection_at',inputFromISO(r?.collection_at),'datetime-local',false,'','required')}
+        ${qcVolumeChoice('plt_volume_unit','plt_volume_input_label','gross_weight_g',r,'volume_input_unit','volume_input_value','gross_weight_g','volume_ml',editable)}
+        <div class="field"><label>น้ำหนักถุงเปล่า (g) <span class="field-badge">อัตโนมัติ</span></label><input id="bag_tare_weight_g" readonly value="${esc(r?.bag_tare_weight_g??'')}"></div>
+        <div class="field"><label>Density <span class="field-badge">อัตโนมัติ</span></label><input id="density" readonly value="${esc(r?.density??'')}"></div>
+        <div class="field"><label>Volume (mL) <span class="field-badge">จากน้ำหนัก</span></label><input id="volume_ml" readonly value="${esc(r?.volume_ml??'')}"></div>
+        <div class="field"><label>วัน-เวลาหมดอายุ <span class="field-badge">อัตโนมัติ</span></label><input id="expiry_preview" readonly value="${esc(inputFromISO(r?.expiry_at))}"></div>
+        <div class="field span2"><label>ผู้บันทึกครั้งแรก</label><input readonly value="${esc(r?dateTH(r.created_at)+' · '+profileName(r.created_by):(state.profile.display_name||state.profile.email))}"></div>
+      </div></div>
+      <div class="panel" id="poolPanel"><div class="section-title-row"><h2>3. Units ที่ใช้ Pool (เฉพาะ LDPPC)</h2><div class="rule-chips"><span class="rule-chip">PYI ≥ ${fmt(state.settings.pool_pyi_standard_min,0)}</span><span class="rule-chip warn">${fmt(state.settings.pool_pyi_conditional_min,0)}–${fmt(state.settings.pool_pyi_standard_min-1,0)} → Yield ≥ ${fmt(state.settings.pool_conditional_yield_min,2)}</span></div></div><div class="table-wrap"><table class="pool-table"><thead><tr><th>#</th><th>Unit No.</th><th>PYI</th></tr></thead><tbody>${[1,2,3,4,5,6].map(i=>{const u=pool.find(x=>x.position===i);return `<tr><td>${i}</td><td><input class="pool-unit" data-pos="${i}" value="${esc(u?.unit_no||'')}" ${editable?'':'disabled'} placeholder="Unit No."></td><td><input class="pool-pyi" data-pos="${i}" type="number" step="0.01" min="0" value="${esc(u?.pyi??'')}" ${editable?'':'disabled'} placeholder="PYI"></td></tr>`}).join('')}</tbody></table></div><div class="pool-summary-grid"><div class="calc-box"><span>Pool PYI</span><strong id="poolSum">${fmt(r?.pool_pyi,2)}</strong></div><div class="calc-box pool-rule-box"><span>สถานะการ Pool / ฉลาก</span><div id="poolRuleStatus">${poolReleaseBadge(r?.pool_release_status)}</div><small id="poolRuleHint"></small></div></div></div>
+      <div class="panel measurement-entry-panel"><div class="section-title-row"><h2>4. ผล Platelet จาก CBC</h2><span class="section-badge">ผล + หลักฐาน</span></div>
+        <div class="form-grid platelet-cbc-meta">
+          <div class="field"><label>เครื่อง CBC</label><select id="plt_instrument" ${editable?'':'disabled'}><option value="">เลือก</option>${['Mindray','Sysmex'].map(x=>`<option ${r?.plt_instrument===x?'selected':''}>${x}</option>`).join('')}</select></div>
+          ${field('วัน-เวลาที่วัด CBC','plt_measured_at',inputFromISO(r?.plt_measured_at),'datetime-local')}
+          <div class="field"><label>ค่าที่ใช้คำนวณ</label><select id="plt_use_mode" ${editable?'':'disabled'}>${[['first','เครื่องที่ 1'],['second','เครื่องที่ 2'],['average','ค่าเฉลี่ยเครื่องที่ 1–2']].map(([v,t])=>`<option value="${v}" ${(r?.plt_use_mode||'first')===v?'selected':''}>${t}</option>`).join('')}</select></div>
+        </div>
+        <div class="table-wrap platelet-repeat-wrap"><table class="data-table platelet-repeat-table"><thead><tr><th></th><th>PLT (K/µL)</th></tr></thead><tbody>
+          <tr><th>เครื่องที่ 1</th><td><input id="plt_value_1" type="number" min="0" step="0.01" value="${esc(r?.plt_value_1??'')}" ${editable?'':'disabled'}></td></tr>
+          <tr><th>เครื่องที่ 2</th><td><input id="plt_value_2" type="number" min="0" step="0.01" value="${esc(r?.plt_value_2??'')}" ${editable?'':'disabled'}></td></tr>
+        </tbody></table></div>
+        ${measurementEvidenceBox('cbc','หลักฐาน CBC / PLT')}
+      </div>
+      <div class="panel measurement-entry-panel"><div class="section-title-row"><h2>5. WBC จาก ADAM</h2><span class="section-badge">ผล + หลักฐาน</span></div><div class="form-grid">${field('WBC (/µL)','wbc_adam',r?.wbc_adam,'number',false,'0.0001')}${field('วัน-เวลาที่วัด ADAM','wbc_measured_at',inputFromISO(r?.wbc_measured_at),'datetime-local')}</div>${measurementEvidenceBox('adam','หลักฐาน ADAM / WBC')}</div>
+      <div class="panel measurement-entry-panel" id="plateletPhPanel"><div class="section-title-row"><h2>6. pH ณ วันหมดอายุ</h2><span class="section-badge">ผล + หลักฐาน</span></div><div class="form-grid">${field('pH','ph_value',r?.ph_value,'number',false,'0.001')}${field('วัน-เวลาที่วัด pH','ph_measured_at',inputFromISO(r?.ph_measured_at),'datetime-local')}<div class="field span2"><label>เหตุผลที่วัด pH ไม่ตรงกำหนด (ไม่ใช่ผล QC ไม่ผ่าน)</label><input id="ph_deviation_reason" value="${esc(r?.ph_deviation_reason||'')}" ${editable?'':'disabled'} placeholder="เช่น เครื่องขัดข้อง / วัดล่าช้า 2 วัน"></div></div><div class="notice info" style="margin-top:8px">หากค่า pH ผ่านเกณฑ์แต่วันที่ตรวจคลาดเคลื่อน ให้บันทึกเหตุผลการล่าช้าและทบทวนตาม SOP โดยไม่ถือว่าเป็นค่า pH ไม่ผ่านเกณฑ์อัตโนมัติ</div>${measurementEvidenceBox('ph','หลักฐาน pH')}</div>
+      <div class="panel"><h2>7. ผลคำนวณอัตโนมัติ</h2><div class="calc-grid"><div class="calc-box"><span>PLT ที่ใช้</span><strong id="cPlt">${fmt(r?.plt_used,2)}</strong><small>K/µL</small></div><div class="calc-box"><span>Platelet yield</span><strong id="cYield">${fmt(r?.platelet_yield,3)}</strong><small>×10¹¹ cells/unit</small></div><div class="calc-box"><span>Equivalent Units</span><strong id="cEq">${fmt(r?.equivalent_units,2)}</strong><small>factor ${state.settings.equivalent_unit_factor}</small></div><div class="calc-box"><span>Residual WBC</span><strong id="cWbc">${fmt(r?.residual_wbc,3)}</strong><small>×10⁶ cells/unit</small></div></div><div id="calcWarnings" style="margin-top:12px"></div></div>
+      <div class="panel"><h2>8. หมายเหตุ</h2><textarea id="notes" ${editable?'':'disabled'} placeholder="บันทึกเหตุการณ์หรือข้อมูลเพิ่มเติม">${esc(r?.notes||'')}</textarea></div>
+      <div class="sticky-actions"><div class="left"><button type="button" class="btn" id="cancelEdit">กลับรายการทั้งหมด</button></div><div class="right ${!r?'new-record-actions':''}">${!r&&editable?'<button type="button" class="btn clear-form-btn" id="clearForm">ล้างฟอร์ม</button>':''}${editable?'<button type="button" class="btn primary" id="saveDraft">บันทึกข้อมูล</button>':''}${r&&r.status==='draft'&&r.record_purpose==='qc'&&editable?'<div class="review-submit-group"><small>ขั้นตอนสุดท้าย · ส่งเมื่อกรอกและแนบหลักฐานครบแล้ว</small><button type="button" class="btn review-submit-btn" id="submitReview">ส่งให้แพทย์ทบทวน</button></div>':''}${r&&r.status==='locked'&&adminUi()&&!deleted?'<button type="button" class="btn danger" id="unlockRecord">ปลดล็อกเป็น Draft</button>':''}</div></div>
+      </form>`;
+    setEditable(editable); applyProductWeightConfig(r); togglePool(); updateCalcPreview(); updatePoolRuleStatus(); renderEvidenceLists(r?.id,editable,locked);
+    $$('input[name="record_purpose"]').forEach(el=>el.addEventListener('change',()=>{$$('.purpose-option').forEach(x=>x.classList.toggle('selected',$('input',x)?.checked));updateCalcPreview();}));
+    if($('#plateletMakeFirstQc'))$('#plateletMakeFirstQc').onclick=()=>{const option=$('input[name="record_purpose"][value="qc"]');if(!option||option.disabled)return;option.checked=true;option.dispatchEvent(new Event('change',{bubbles:true}));showToast('เลือกเป็น QC แล้ว กรุณาบันทึกข้อมูลและหลักฐานให้ครบ','good');};
+    const refreshPlateletOwner=()=>refreshPlannerOwnerHint('plateletPlannerOwnerHint',$('#collection_at')?.value,'platelet',$('#product_type')?.value||'');
+    $('#plt_volume_unit')?.addEventListener('change',()=>qcVolumeSwitch('plt_volume_unit','gross_weight_g','plt_volume_input_label','previousUnit',num($('#bag_tare_weight_g')?.value),num($('#density')?.value),updateCalcPreview));
+    $('#product_type').addEventListener('change',()=>{applyProductWeightConfig(null);togglePool();updateCalcPreview();refreshPlateletOwner();if(!r)maybeAutoSelectPlateletQc();}); ['collection_at','gross_weight_g','plt_value_1','plt_value_2','plt_use_mode','wbc_adam','ph_value','ph_measured_at','plt_measured_at','wbc_measured_at'].forEach(id=>$('#'+id)?.addEventListener('input',updateCalcPreview));
+    $('#collection_at')?.addEventListener('change',refreshPlateletOwner);refreshPlateletOwner();
+    $$('.pool-pyi,.pool-unit').forEach(x=>x.addEventListener('input',updatePoolPreview));
+    $('#recordGuideBtn').onclick=()=>switchView('guide'); if($('#recordNoPoolBtn')) $('#recordNoPoolBtn').onclick=()=>openPlateletNoPoolDialog(); $('#cancelEdit').onclick=()=>switchView('records'); if($('#clearForm')) $('#clearForm').onclick=clearNewRecordForm; if($('#saveDraft')) $('#saveDraft').onclick=()=>saveRecord(false); if($('#submitReview')) $('#submitReview').onclick=submitRecord; if($('#returnForCorrection')) $('#returnForCorrection').onclick=returnForCorrection; if($('#approveAndLock')) $('#approveAndLock').onclick=approveAndLock; if($('#unlockRecord')) $('#unlockRecord').onclick=unlockRecord;
+    if(!r&&$('#collection_at')){$('#collection_at').addEventListener('change',()=>maybeAutoSelectPlateletQc());$('#collection_at').addEventListener('blur',()=>maybeAutoSelectPlateletQc());}
+    if(!r)backlogApplyNewContext('platelet',$('#view-record'));
+    if(state.scrollToPlateletPh){state.scrollToPlateletPh=false;$('#plateletPhPanel')?.scrollIntoView({behavior:'smooth',block:'start'});if(editable)$('#ph_value')?.focus({preventScroll:true});}
+  }
+
+  // v5.3.51: measured net mL is used directly for QC calculations. Only the legacy DB gross column uses a mathematically equivalent value.
+  // Preserve input_unit/input_value in Supabase for audit; legacy calculation triggers still consume gross_weight_g.
+  function qcVolumeUnit(unit){return unit==='mL'?'mL':'g';}
+  function qcVolumeOriginal(record,unitColumn,valueColumn,grossColumn,volumeColumn){
+    const u=qcVolumeUnit(record?.[unitColumn]);
+    const stored=num(record?.[valueColumn]);
+    const fallback=num(record?.[u==='mL'?volumeColumn:grossColumn]);
+    return {unit:u,value:stored===null?fallback:stored};
+  }
+  function qcVolumeInput(unitSelect,input,tare,density){
+    const unit=qcVolumeUnit(unitSelect?.value),value=num(input?.value);
+    if(value===null)return {unit,value:null,gross:null,volume:null};
+    if(value<0)return {unit,value,gross:null,volume:null};
+    if(unit==='mL'){
+      if(tare===null||density===null||density<=0)return {unit,value,gross:null,volume:null};
+      const equivalentGross=Math.round((value*density+tare)*1e6)/1e6;
+      return {unit,value,gross:equivalentGross,volume:value};
+    }
+    return {unit,value,gross:value,volume:(tare!==null&&density!==null&&density>0&&value>=tare)?(value-tare)/density:null};
+  }
+  // Staff-facing form: show weight conversion fields only when the instrument supplies grams.
+  // The calculation is preserved internally for backward-compatible persistence and QC results.
+  function syncQcVolumeFormFields(){
+    const pairs={
+      plt_volume_unit:['bag_tare_weight_g','density','volume_ml'],
+      plasma_volume_unit:['plasma_tare','plasma_density','plasma_volume'],
+      rbc_source_unit:['rbc_source_tare','rbc_source_density','rbc_source_volume_preview'],
+      rbc_final_unit:['rbcFinalTare','rbcFinalDensity','rbcFinalVolume']
+    };
+    Object.entries(pairs).forEach(([unitId,fieldIds])=>{
+      const select=$('#'+unitId);if(!select)return;
+      const direct=qcVolumeUnit(select.value)==='mL';
+      fieldIds.forEach(id=>{
+        const field=$('#'+id)?.closest('.field');
+        if(field)field.classList.toggle('hidden',direct);
+      });
+    });
+  }
+  function qcVolumeSwitch(unitId,inputId,labelId,prevKey,tare,density,preview){
+    const unit=$('#'+unitId),input=$('#'+inputId);if(!unit||!input)return;
+    const last=qcVolumeUnit(unit.dataset[prevKey]||'g'),next=qcVolumeUnit(unit.value);
+    // Clinical safety: a measured mL number must not be mistaken for measured grams.
+    // Clear entry on switching unit; staff re-enter the reading shown by the instrument.
+    if(last!==next)input.value='';
+    unit.dataset[prevKey]=next;
+    const label=$('#'+labelId);if(label)label.textContent=next==='mL'?'ปริมาตรสุทธิ (mL)':'น้ำหนักรวมถุง (g)';
+    input.placeholder=next==='mL'?'กรอกปริมาตร (mL)':'กรอกน้ำหนัก (g)';
+    if(last!==next&&typeof input.focus==='function')input.focus();
+    if(typeof preview==='function')preview();
+  }
+  function qcVolumeChoice(unitId,labelId,entryId,record,unitColumn,valueColumn,grossColumn,volumeColumn,editable){
+    const original=qcVolumeOriginal(record,unitColumn,valueColumn,grossColumn,volumeColumn);
+    const unit=original.unit;
+    return `<div class="field qc-unit-picker"><label>หน่วยที่เครื่องแสดง</label><select id="${unitId}" data-volume-unit="${unit}" data-previous-unit="${unit}" ${editable?'':'disabled'}><option value="g" ${unit==='g'?'selected':''}>g · กรัม</option><option value="mL" ${unit==='mL'?'selected':''}>mL · ปริมาตร</option></select></div><div class="field qc-unit-entry"><label id="${labelId}">${unit==='mL'?'ปริมาตรสุทธิ (mL)':'น้ำหนักรวมถุง (g)'}</label><input id="${entryId}" type="number" min="0" step="0.01" value="${esc(original.value??'')}" ${editable?'':'disabled'}></div>`;
+  }
+  function field(label,id,value,type='text',readonly=false,step='',required=''){ const disabled=readonly?'readonly':''; return `<div class="field"><label class="${required}">${label}</label><input id="${id}" type="${type}" value="${esc(value??'')}" ${step?`step="${step}"`:''} ${type==='number'?'min="0"':''} ${disabled}></div>`; }
+  function setEditable(editable){ if(editable) return; $$('#recordForm input,#recordForm select,#recordForm textarea').forEach(el=>{if(!el.readOnly) el.disabled=true;}); }
+  function currentProductConfig(){ return productSetting($('#product_type')?.value||''); }
+  function applyProductWeightConfig(record=null){
+    const cfg=currentProductConfig();
+    const sameRecord=record && record.product_type===$('#product_type')?.value;
+    const tare=sameRecord&&record.bag_tare_weight_g!==null&&record.bag_tare_weight_g!==undefined?Number(record.bag_tare_weight_g):(cfg?Number(cfg.tare_weight_g):null);
+    const density=sameRecord&&record.density!==null&&record.density!==undefined?Number(record.density):(cfg?Number(cfg.density):null);
+    if($('#bag_tare_weight_g')) $('#bag_tare_weight_g').value=tare??'';
+    if($('#density')) $('#density').value=density??'';
+  }
+  function togglePool(){ const cfg=currentProductConfig(); const show=cfg?!!cfg.requires_pool:$('#product_type').value.startsWith('LDPPC '); $('#poolPanel').classList.toggle('hidden',!show); }
+  function currentPoolSum(){ return $$('.pool-pyi').reduce((s,x)=>s+(num(x.value)||0),0); }
+  function updatePoolPreview(){ const sum=currentPoolSum(); if($('#poolSum')) $('#poolSum').textContent=fmt(sum,2); updatePoolRuleStatus(); }
+  function poolReleaseState(poolPyi,yieldValue){
+    const std=Number(state.settings.pool_pyi_standard_min??280),cond=Number(state.settings.pool_pyi_conditional_min??260),yieldMin=Number(state.settings.pool_conditional_yield_min??2);
+    if(poolPyi===null||poolPyi<=0) return 'pending_pool';
+    if(poolPyi>=std) return 'standard';
+    if(poolPyi>=cond){ if(yieldValue===null) return 'conditional_pending'; return yieldValue>=yieldMin?'conditional_pass':'conditional_fail'; }
+    return 'below_min';
+  }
+  function updatePoolRuleStatus(){
+    if(!$('#poolRuleStatus')||$('#poolPanel')?.classList.contains('hidden')) return;
+    const poolPyi=currentPoolSum(),c=calcFrontend(),st=poolReleaseState(poolPyi,c.y);
+    $('#poolRuleStatus').innerHTML=poolReleaseBadge(st);
+    const std=Number(state.settings.pool_pyi_standard_min??280),cond=Number(state.settings.pool_pyi_conditional_min??260),yieldMin=Number(state.settings.pool_conditional_yield_min??2);
+    const hint=st==='conditional_pending'?`รอ Platelet yield ≥ ${fmt(yieldMin,2)}`:
+      st==='conditional_pass'?`Yield ${fmt(c.y,3)} ≥ ${fmt(yieldMin,2)}`:
+      st==='conditional_fail'?`Yield ${fmt(c.y,3)} < ${fmt(yieldMin,2)}`:
+      st==='below_min'?`ต่ำกว่า ${fmt(cond,0)}`:'';
+    if($('#poolRuleHint')) $('#poolRuleHint').textContent=hint;
+  }
+  async function clearNewRecordForm(){
+    if(state.currentRecordId) return;
+    if(!await qcConfirmCentered('ล้างข้อมูลที่กรอกในฟอร์มนี้ทั้งหมด?',{title:'ล้างฟอร์ม Platelet',acceptText:'ล้างข้อมูล'})) return;
+    renderRecordForm();
+  }
+  function calcFrontend(){
+    const tare=num($('#bag_tare_weight_g')?.value),density=num($('#density')?.value),entry=qcVolumeInput($('#plt_volume_unit'),$('#gross_weight_g'),tare,density),gross=entry.gross,legacyVolume=num($('#volume_ml')?.value); const volume=entry.value!==null?entry.volume:null; const p1=num($('#plt_value_1')?.value),p2=num($('#plt_value_2')?.value),mode=$('#plt_use_mode')?.value,wbc=num($('#wbc_adam')?.value),ph=num($('#ph_value')?.value); let used=null;
+    if(mode==='first') used=p1; else if(mode==='second') used=p2; else if(p1!==null&&p2!==null) used=(p1+p2)/2;
+    const y=volume!==null&&used!==null?volume*used/100000:null, eq=y!==null?y/Number(state.settings.equivalent_unit_factor):null, rw=volume!==null&&wbc!==null?volume*wbc/1000:null; let diff=null; if(p1!==null&&p2!==null&&(p1+p2)>0) diff=Math.abs(p1-p2)/((p1+p2)/2)*100;
+    return {gross,tare,density,volume,p1,p2,used,y,eq,rw,diff,ph};
+  }
+  function updateCalcPreview(){
+    syncQcVolumeFormFields();
+    const c=calcFrontend(); if($('#volume_ml')) $('#volume_ml').value=c.volume===null?'':Number(c.volume).toFixed(2); $('#cPlt').textContent=fmt(c.used,2);$('#cYield').textContent=fmt(c.y,3);$('#cEq').textContent=fmt(c.eq,2);$('#cWbc').textContent=fmt(c.rw,3); const col=$('#collection_at')?.value;if(col){const d=new Date(col+':00+07:00');d.setDate(d.getDate()+Number(state.settings.expiry_days));$('#expiry_preview').value=inputFromISO(d.toISOString());}
+    const isQc=($('input[name="record_purpose"]:checked')?.value||'prepare')==='qc';
+    const w=[]; if($('#plt_volume_unit')?.value==='g'&&c.gross!==null&&c.tare!==null&&c.gross<c.tare)w.push('น้ำหนักที่ชั่งได้น้อยกว่าน้ำหนักถุงเปล่า กรุณาตรวจสอบ'); if(num($('#gross_weight_g')?.value)!==null&&(c.tare===null||c.density===null))w.push('ยังไม่มีค่าน้ำหนักถุง/Density สำหรับผลิตภัณฑ์นี้');
+    const cfg=currentProductConfig(); if(cfg?.requires_pool){ const pst=poolReleaseState(currentPoolSum(),c.y); const cond=Number(state.settings.pool_pyi_conditional_min??260),std=Number(state.settings.pool_pyi_standard_min??280),ym=Number(state.settings.pool_conditional_yield_min??2); if(pst==='below_min')w.push(`Pool PYI ต่ำกว่า ${fmt(cond,0)} ไม่เข้าเงื่อนไขอนุโลม`); if(pst==='conditional_pending')w.push(`Pool PYI อยู่ช่วง ${fmt(cond,0)}–<${fmt(std,0)} ต้องตรวจ Platelet yield และต้อง ≥ ${fmt(ym,2)} ×10¹¹ cells/unit`); if(pst==='conditional_fail')w.push(`Pool PYI อยู่ช่วงอนุโลม แต่ Platelet yield ต้อง ≥ ${fmt(ym,2)} ×10¹¹ cells/unit จึงผ่านสำหรับฉลากปกติ`); }
+    if(isQc){ if(c.y!==null&&c.y<Number(state.settings.platelet_yield_min))w.push(`Platelet yield ต่ำกว่า ${state.settings.platelet_yield_min}`); if(c.rw!==null&&c.rw>Number(state.settings.residual_wbc_max))w.push(`Residual WBC มากกว่า ${state.settings.residual_wbc_max}`); if(c.ph!==null&&c.ph<Number(state.settings.ph_min))w.push(`pH ต่ำกว่า ${state.settings.ph_min}`); }
+    const pm=$('#ph_measured_at')?.value, ex=$('#expiry_preview')?.value; if(pm&&ex&&pm.slice(0,10)!==ex.slice(0,10))w.push('วันที่วัด pH ไม่ตรงวันหมดอายุ ต้องใส่เหตุผลก่อนส่งตรวจทวน');
+    const diffNote=isQc&&c.diff!==null?`<div class="notice info" style="margin-top:8px"><strong>ข้อมูลประกอบแพทย์ทบทวน:</strong> ผลต่าง PLT 2 เครื่อง ${fmt(c.diff,1)}% (ไม่ใช้ตัดสิน QC/เปิด NC อัตโนมัติ)</div>`:'';
+    if(w.length) $('#calcWarnings').innerHTML=`<div class="notice warning"><strong>ต้องตรวจสอบ</strong><br>${w.map(esc).join('<br>')}</div>`+diffNote;
+    else if(isQc) $('#calcWarnings').innerHTML='<div class="notice good">ยังไม่พบเงื่อนไขเตือนตามเกณฑ์ QC จากค่าที่กรอก</div>'+diffNote;
+    else $('#calcWarnings').innerHTML='';
+    updatePoolRuleStatus();
+  }
+  function measurementEvidenceBox(cat,title){ const multiHint=cat==='cbc'?'<small class="evidence-multi-hint">ผลเครื่องที่ 1 และ 2 เลือกหลายรูปพร้อมกันได้</small>':'<small class="evidence-multi-hint">เลือกหลายรูปหรือหลายไฟล์พร้อมกันได้</small>'; return `<div class="measurement-evidence"><div class="measurement-evidence-head"><div><strong>${title}</strong>${multiHint}</div><span class="section-badge required-evidence">บังคับ</span></div><input class="hidden-file-input" type="file" id="camera_${cat}" accept="image/*" capture="environment"><input class="hidden-file-input" type="file" id="file_${cat}" accept="image/*,application/pdf" multiple><div class="evidence-pick-actions"><button type="button" class="btn primary small-btn camera-pick" data-cat="${cat}">ถ่ายรูป</button><button type="button" class="btn small-btn file-pick" data-cat="${cat}">เลือกรูป / ไฟล์ <span class="multi-file-label">หลายไฟล์ได้</span></button></div><div class="evidence-list" id="list_${cat}"></div></div>`; }
+  function renderEvidenceLists(recordId,editable,locked=false){ ['cbc','adam','ph'].forEach(cat=>{ const host=$('#list_'+cat); if(!host)return; const arr=state.currentEvidence.filter(x=>x.category===cat); const canDelete=editable && !(locked&&adminUi()); host.innerHTML=arr.length?arr.map(e=>`<div class="evidence-item"><span class="name evidence-name" title="${esc(e.original_name)}"><strong>${esc(e.original_name)}</strong><small>ผู้แนบหลักฐาน ${esc(profileName(e.uploaded_by))} · ${esc(dateTH(e.created_at))}</small>${e.change_reason?`<small class="evidence-reason">Admin: ${esc(e.change_reason)}</small>`:''}</span><span class="e-actions"><button type="button" class="btn small-btn ev-view" data-id="${e.id}">ดู</button>${canDelete?`<button type="button" class="btn small-btn danger ev-del" data-id="${e.id}">ลบ</button>`:''}</span></div>`).join(''):'<div class="muted small">ยังไม่มีหลักฐาน</div>'; });
+    $$('.ev-view').forEach(b=>b.onclick=()=>viewEvidence(b.dataset.id)); $$('.ev-del').forEach(b=>b.onclick=()=>deleteEvidence(b.dataset.id));
+    $$('.camera-pick').forEach(b=>{b.disabled=!editable;b.onclick=()=>$('#camera_'+b.dataset.cat).click();});
+    $$('.file-pick').forEach(b=>{b.disabled=!editable;b.onclick=()=>$('#file_'+b.dataset.cat).click();});
+    ['cbc','adam','ph'].forEach(cat=>{ const camera=$('#camera_'+cat), file=$('#file_'+cat); if(camera)camera.onchange=()=>uploadEvidence(cat,'camera'); if(file)file.onchange=()=>uploadEvidence(cat,'file'); });
+  }
+
+  function plateletHasEvidence(cat){return state.currentEvidence.some(e=>e.category===cat);}
+  function plateletEvidenceMissing(payload){const m=[];if((payload.plt_value_1!==null||payload.plt_value_2!==null)&&!plateletHasEvidence('cbc'))m.push('ผล Platelet จาก CBC ต้องมีหลักฐาน CBC');if(payload.wbc_adam!==null&&!plateletHasEvidence('adam'))m.push('ผล WBC จาก ADAM ต้องมีหลักฐาน ADAM');if(payload.ph_value!==null&&!plateletHasEvidence('ph'))m.push('ผล pH ต้องมีหลักฐาน pH');return m;}
+  function stripPlateletResults(payload){return {...payload,plt_instrument:null,plt_value_1:null,plt_value_2:null,plt_measured_at:null,wbc_adam:null,wbc_measured_at:null,ph_value:null,ph_measured_at:null,ph_deviation_reason:null};}
+  async function ensureSaved(){ if(state.currentRecordId) return state.currentRecordId; const ok=await saveRecord(true,true); return ok?state.currentRecordId:null; }
+  function collectRecord(){
+    const purpose=$('input[name="record_purpose"]:checked')?.value||'prepare';
+    const existing=state.currentRecordId?state.records.find(x=>x.id===state.currentRecordId):null;
+    const enteredPhReason=$('#ph_deviation_reason').value.trim();
+    const payload={record_purpose:purpose,product_no:$('#product_no').value.trim(),product_type:$('#product_type').value,blood_group:$('#blood_group').value||null,collection_at:bangkokISO($('#collection_at').value),gross_weight_g:qcVolumeInput($('#plt_volume_unit'),$('#gross_weight_g'),num($('#bag_tare_weight_g')?.value),num($('#density')?.value)).gross,volume_input_unit:qcVolumeUnit($('#plt_volume_unit')?.value),volume_input_value:num($('#gross_weight_g')?.value),plt_instrument:$('#plt_instrument').value||null,plt_value_1:num($('#plt_value_1').value),plt_value_2:num($('#plt_value_2').value),plt_measured_at:bangkokISO($('#plt_measured_at').value),plt_use_mode:$('#plt_use_mode').value,wbc_adam:num($('#wbc_adam').value),wbc_measured_at:bangkokISO($('#wbc_measured_at').value),ph_value:num($('#ph_value').value),ph_measured_at:bangkokISO($('#ph_measured_at').value),ph_deviation_reason:enteredPhReason||existing?.ph_deviation_reason||null,notes:$('#notes').value.trim()||null};
+    if(state.currentRecordId&&adminUi()){
+      const reason=$('#admin_edit_reason')?.value.trim();
+      if(reason){payload.last_admin_edit_reason=reason;payload.last_admin_edit_id=crypto.randomUUID();}
+    }
+    return payload;
+  }
+
+  function maybeAutoSelectPlateletQc(){
+    if(state.currentRecordId)return;
+    const raw=$('#collection_at')?.value,productType=$('#product_type')?.value||'';
+    if(!raw||!productType)return;
+    const date=raw.slice(0,10),ym=monthKeyFromDateString(date),slot=plateletTrackingWeekSlot(date);
+    if(!slot)return;
+    if(plateletQcInSlot(ym,slot,null,productType).length)return;
+    const earliest=plateletFirstRecordInSlot(ym,slot,productType);
+    if(earliest){
+      // Do not quietly designate a later bag when the first bag is already in Draft.
+      showToast(`ถุงแรกของรอบนี้คือ ${earliest.product_no} · กรุณาเปิดถุงเดิมเพื่อเลือก QC`, 'warning');
+      return;
+    }
+    const radio=$('input[name="record_purpose"][value="qc"]');
+    if(radio&&!radio.checked){
+      radio.checked=true;
+      $$('.purpose-option').forEach(x=>x.classList.toggle('selected',x.querySelector('input')?.checked));
+      updateCalcPreview();
+      showToast(`${productType} · สัปดาห์ ${slot}: ถุงแรกใช้เป็น QC โดยอัตโนมัติ`,'good');
+    }
+  }
+  function collectPool(){ return [1,2,3,4,5,6].map(i=>({position:i,unit_no:$(`.pool-unit[data-pos="${i}"]`).value.trim(),pyi:num($(`.pool-pyi[data-pos="${i}"]`).value)})).filter(x=>x.unit_no||x.pyi!==null); }
+  function normalizedPool(rows){ return rows.map(x=>({position:Number(x.position),unit_no:String(x.unit_no||''),pyi:x.pyi===null?null:Number(x.pyi)})).filter(x=>x.unit_no||x.pyi!==null).sort((a,b)=>a.position-b.position); }
+  function poolHasChanged(){ return JSON.stringify(normalizedPool(collectPool()))!==JSON.stringify(normalizedPool(state.currentPool||[])); }
+  async function savePool(recordId){
+    const rows=collectPool(); for(const x of rows){if(!x.unit_no||x.pyi===null)throw new Error(`Pool unit #${x.position}: กรุณากรอก Unit No. และ PYI ให้ครบ`);}
+    if(!poolHasChanged()) return;
+    const {error:del}=await state.sb.from('pool_units').delete().eq('record_id',recordId); if(del)throw del;
+    if(rows.length){const {error}=await state.sb.from('pool_units').insert(rows.map(x=>({...x,record_id:recordId,created_by:state.user.id})));if(error)throw error;}
+    state.currentPool=normalizedPool(rows);
+  }
+  function recordPayloadHasChanged(payload){
+    const cur=state.records.find(x=>x.id===state.currentRecordId); if(!cur)return false;
+    const keys=['record_purpose','product_no','product_type','blood_group','collection_at','gross_weight_g','volume_input_unit','volume_input_value','plt_instrument','plt_value_1','plt_value_2','plt_measured_at','plt_use_mode','wbc_adam','wbc_measured_at','ph_value','ph_measured_at','ph_deviation_reason','notes'];
+    const dateKeys=new Set(['collection_at','plt_measured_at','wbc_measured_at','ph_measured_at']);
+    const numberKeys=new Set(['gross_weight_g','volume_input_value','plt_value_1','plt_value_2','wbc_adam','ph_value']);
+    const norm=(k,v)=>{if(v===undefined||v===null||v==='')return null;if(dateKeys.has(k)){const d=new Date(v);return Number.isNaN(d.getTime())?String(v):d.toISOString();}if(numberKeys.has(k))return Number(v);return String(v);};
+    return keys.some(k=>JSON.stringify(norm(k,payload[k]))!==JSON.stringify(norm(k,cur[k])));
+  }
+
+  async function saveRecord(silent=false,auto=false){
+    if(!qcDateGuard())return false;
+    try{
+      if(!state.currentRecordId)maybeAutoSelectPlateletQc();
+      let payload=collectRecord();
+      if(payload.volume_input_value!==null&&payload.gross_weight_g===null){showToast('ตรวจสอบน้ำหนักถุงเปล่า / Density หรือค่า mL ที่กรอก','error');return false;}
+      if(!payload.product_no||!payload.product_type){if(auto)showToast('กรอก Product No. และผลิตภัณฑ์ก่อนแนบไฟล์','error');else showToast('กรุณากรอก Product No. และผลิตภัณฑ์','error');return false;}
+      let id=state.currentRecordId;
+      if(auto&&!id) payload=stripPlateletResults(payload);
+      if(!auto){const missingEvidence=plateletEvidenceMissing(payload);if(missingEvidence.length){showToast(missingEvidence[0],'error');return false;}}
+      const recordChanged=id?recordPayloadHasChanged(payload):true;
+      const poolChangedNow=id?poolHasChanged():false;
+      if(id&&adminUi()){
+        const correction=recordChanged||poolChangedNow;
+        if(correction&&!payload.last_admin_edit_reason){showToast('Admin กรุณาระบุเหตุผลการแก้ไขก่อนบันทึก','error');$('#admin_edit_reason')?.focus();return false;}
+        if(!correction){delete payload.last_admin_edit_reason;delete payload.last_admin_edit_id;}
+      }
+      if(id){if(recordChanged || (adminUi()&&poolChangedNow)){const {error}=await state.sb.from('platelet_records').update(payload).eq('id',id);if(error)throw error;}}
+      else {const {data,error}=await state.sb.from('platelet_records').insert({...payload,created_by:state.user.id}).select('id').single();if(error)throw error;id=data.id;state.currentRecordId=id;}
+      if(productSetting(payload.product_type)?.requires_pool || payload.product_type?.startsWith('LDPPC ')) await savePool(id); else if((state.currentPool||[]).length){const {error}=await state.sb.from('pool_units').delete().eq('record_id',id);if(error)throw error;state.currentPool=[];}
+      await loadRecords(); if(!silent)showToast(state.currentRecordId===id?'บันทึกแล้ว':'บันทึกแล้ว','good'); if(!auto) await renderRecordForm(); return true;
+    }catch(e){showToast(errText(e),'error');return false;}
+  }
+
+  async function stableUploadBody(file){
+    if(!file) throw new Error('ไม่พบไฟล์ที่เลือก');
+    const fileName=String(file.name||'ไฟล์');
+    const declaredSize=Number(file.size||0);
+    if(declaredSize<=0) throw new Error(`${fileName}: ไฟล์ไม่มีข้อมูล กรุณาเลือกรูปใหม่อีกครั้ง`);
+    if(declaredSize>10*1024*1024) throw new Error(`${fileName}: ไฟล์ต้องไม่เกิน 10 MB`);
+    // iOS/Safari บางครั้งส่ง File object จาก multi-select ผ่าน async network step แล้ว Storage อ่าน body ไม่ได้
+    // จึง copy bytes ออกมาเป็น Blob ที่คงที่ก่อนอัปโหลด เพื่อไม่ให้เกิด "No content provided".
+    let bytes;
+    try{
+      bytes=typeof file.arrayBuffer==='function'?await file.arrayBuffer():await new Response(file).arrayBuffer();
+    }catch(_){
+      throw new Error(`${fileName}: อ่านไฟล์จากเครื่องไม่สำเร็จ กรุณาเลือกรูปใหม่`);
+    }
+    if(!bytes?.byteLength) throw new Error(`${fileName}: ไฟล์ไม่มีข้อมูล กรุณาเลือกรูปใหม่อีกครั้ง`);
+    return new Blob([bytes],{type:file.type||'application/octet-stream'});
+  }
+  function evidenceUploadName(fileName,mime){
+    const raw=String(fileName||'evidence').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-100)||'evidence';
+    if(mime==='image/jpeg') return raw.replace(/\.[^.]+$/,'')+'.jpg';
+    return raw;
+  }
+  async function optimizeEvidenceFile(file){
+    const originalName=String(file?.name||'evidence');
+    const originalSize=Number(file?.size||0);
+    const originalMime=String(file?.type||'application/octet-stream');
+    const originalBody=await stableUploadBody(file);
+    const isImage=/^image\//i.test(originalMime) && !/gif|svg/i.test(originalMime);
+    if(!isImage || originalSize<700*1024) return {body:originalBody,mime:originalMime,uploadName:evidenceUploadName(originalName,originalMime),originalName,originalSize,optimized:false};
+    try{
+      let bitmap=null,img=null,width=0,height=0;
+      if(typeof createImageBitmap==='function'){
+        bitmap=await createImageBitmap(originalBody);width=bitmap.width;height=bitmap.height;
+      }else{
+        const url=URL.createObjectURL(originalBody);
+        try{img=await new Promise((resolve,reject)=>{const x=new Image();x.onload=()=>resolve(x);x.onerror=reject;x.src=url;});width=img.naturalWidth||img.width;height=img.naturalHeight||img.height;}finally{URL.revokeObjectURL(url);}
+      }
+      if(!width||!height) throw new Error('อ่านขนาดรูปไม่ได้');
+      const maxSide=2200,scale=Math.min(1,maxSide/Math.max(width,height));
+      const outW=Math.max(1,Math.round(width*scale)),outH=Math.max(1,Math.round(height*scale));
+      const canvas=document.createElement('canvas');canvas.width=outW;canvas.height=outH;
+      const ctx=canvas.getContext('2d',{alpha:false});if(!ctx)throw new Error('ไม่รองรับ canvas');
+      ctx.fillStyle='#fff';ctx.fillRect(0,0,outW,outH);ctx.drawImage(bitmap||img,0,0,outW,outH);bitmap?.close?.();
+      const compressed=await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('ย่อรูปไม่สำเร็จ')),'image/jpeg',0.86));
+      if(compressed.size>=originalBody.size*0.92) return {body:originalBody,mime:originalMime,uploadName:evidenceUploadName(originalName,originalMime),originalName,originalSize,optimized:false};
+      return {body:compressed,mime:'image/jpeg',uploadName:evidenceUploadName(originalName,'image/jpeg'),originalName,originalSize,optimized:true};
+    }catch(err){
+      console.warn('Image optimization skipped',originalName,err);
+      return {body:originalBody,mime:originalMime,uploadName:evidenceUploadName(originalName,originalMime),originalName,originalSize,optimized:false};
+    }
+  }
+  function evidenceUploadErrorText(e,fileName='ไฟล์'){
+    const raw=errText(e);
+    if(/no content provided/i.test(raw)) return `${fileName}: ระบบไม่ได้รับข้อมูลของไฟล์ กรุณาเลือกรูปใหม่อีกครั้ง`;
+    return `${fileName}: ${raw}`;
+  }
+  async function uploadEvidence(cat,source='file'){
+    const input=$('#'+(source==='camera'?'camera_':'file_')+cat);
+    const files=Array.from(input?.files||[]);
+    if(!files.length){showToast('เลือกไฟล์ก่อน','error');return;}
+    try{
+      let changeReason=null;
+      if(state.currentRecordId&&adminUi()){
+        changeReason=$('#admin_edit_reason')?.value.trim()||null;
+        if(!changeReason){showToast('Admin กรุณาระบุเหตุผลการแก้ไขก่อนแนบหลักฐานใหม่','error');input.value='';$('#admin_edit_reason')?.focus();return;}
+      }
+      // Copy file bytes before awaiting save/network calls. This is more reliable on iPhone/PWA multi-select.
+      const prepared=[];
+      for(const file of files){
+        try{prepared.push({file,prepared:await optimizeEvidenceFile(file)});}
+        catch(e){showToast(evidenceUploadErrorText(e,file?.name||'ไฟล์'),'error');input.value='';return;}
+      }
+      const rid=await ensureSaved();if(!rid){input.value='';return;}
+      let uploaded=0;const failed=[];
+      for(let i=0;i<prepared.length;i++){
+        const {file,prepared:pfile}=prepared[i];
+        const body=pfile.body;
+        const clean=pfile.uploadName||`evidence_${i+1}`;
+        const unique=(globalThis.crypto?.randomUUID?.()||`${Date.now()}_${i}`);
+        const path=`${rid}/${cat}/${unique}_${clean}`;
+        let storageUploaded=false;
+        try{
+          const mime=pfile.mime||body.type||'application/octet-stream';
+          const {error:uerr}=await state.sb.storage.from('platelet-evidence').upload(path,body,{upsert:false,contentType:mime});
+          if(uerr)throw uerr;
+          storageUploaded=true;
+          const {data,error}=await state.sb.from('evidence_files').insert({record_id:rid,category:cat,storage_path:path,original_name:file.name||clean,mime_type:mime,file_size:body.size,uploaded_by:state.user.id,change_reason:changeReason}).select('*').single();
+          if(error)throw error;
+          state.currentEvidence.push(data);uploaded++;
+        }catch(e){
+          if(storageUploaded) await state.sb.storage.from('platelet-evidence').remove([path]);
+          failed.push(evidenceUploadErrorText(e,file.name||`ไฟล์ ${i+1}`));
+        }
+      }
+      input.value='';
+      const current=state.records.find(x=>x.id===rid);renderEvidenceLists(rid,true,current?.status==='locked');
+      if(uploaded&&failed.length) showToast(`อัปโหลดสำเร็จ ${uploaded}/${prepared.length} ไฟล์ · ${failed[0]}`,'error');
+      else if(uploaded) showToast(uploaded>1?`อัปโหลดหลักฐานแล้ว ${uploaded} ไฟล์`:'อัปโหลดหลักฐานแล้ว','good');
+      else showToast(failed[0]||'อัปโหลดหลักฐานไม่สำเร็จ กรุณาลองใหม่','error');
+    }catch(e){input.value='';showToast(evidenceUploadErrorText(e),'error');}
+  }
+
+  async function viewEvidence(id){ const e=state.currentEvidence.find(x=>x.id===id);if(!e)return; const {data,error}=await state.sb.storage.from('platelet-evidence').createSignedUrl(e.storage_path,120);if(error){showToast(errText(error),'error');return;} window.open(data.signedUrl,'_blank','noopener'); }
+  async function deleteEvidence(id){
+    const e=state.currentEvidence.find(x=>x.id===id);if(!e)return;
+    const current=state.records.find(x=>x.id===state.currentRecordId);
+    if(current?.status==='locked'&&adminUi()){showToast('รายการ LOCK แล้ว ให้คงหลักฐานเดิมและแนบหลักฐานใหม่เพิ่ม','error');return;}
+    let adminReason=null;
+    if(state.currentRecordId&&adminUi()){
+      adminReason=$('#admin_edit_reason')?.value.trim()||null;
+      if(!adminReason){showToast('Admin กรุณาระบุเหตุผลการแก้ไขก่อนลบหลักฐาน','error');$('#admin_edit_reason')?.focus();return;}
+    }
+    if(!await qcConfirmCentered(`ลบหลักฐาน ${e.original_name} ?`,{title:'ลบหลักฐาน',acceptText:'ลบ',acceptClass:'danger'}))return;
+    if(adminReason){
+      const {error:logErr}=await state.sb.from('platelet_records').update({last_admin_edit_reason:adminReason,last_admin_edit_id:crypto.randomUUID()}).eq('id',state.currentRecordId);
+      if(logErr){showToast(errText(logErr),'error');return;}
+    }
+    const {error}=await state.sb.from('evidence_files').delete().eq('id',id);if(error){showToast(errText(error),'error');return;}
+    const {error:s}=await state.sb.storage.from('platelet-evidence').remove([e.storage_path]);if(s)console.warn('storage cleanup failed',s);
+    state.currentEvidence=state.currentEvidence.filter(x=>x.id!==id);renderEvidenceLists(state.currentRecordId,true,false);showToast('ลบหลักฐานแล้ว');
+  }
+  async function submitRecord(){ if(!await qcConfirmCentered('ยืนยันส่งให้แพทย์ทบทวน?\n\nระบบจะบันทึกข้อมูลล่าสุดและเปลี่ยนสถานะเป็น “รอแพทย์” เจ้าหน้าที่จะกลับมาแก้ไขเองไม่ได้จนกว่าแพทย์จะส่งกลับแก้ไข',{title:'ส่งให้แพทย์ทบทวน',acceptText:'ยืนยันส่ง'}))return; if(!await saveRecord(true))return; const current=state.records.find(r=>r.id===state.currentRecordId); if(current?.record_purpose!=='qc'){showToast('Prepare บันทึกได้ตามปกติ ไม่ต้องส่งแพทย์ทบทวน','good');return;} try{const {error}=await state.sb.from('platelet_records').update({status:'submitted'}).eq('id',state.currentRecordId);if(error)throw error;await loadRecords();showToast('ส่งให้แพทย์ทบทวนแล้ว','good');await renderRecordForm();}catch(e){showToast(errText(e),'error');} }
+  async function refreshAfterReviewAction(){
+    if(state.currentView==='review') renderReviewQueue();
+    else if(state.currentView==='records') renderRecordsList();
+    else if(state.currentView==='dashboard') renderDashboard();
+    else if(state.currentView==='home') renderHome();
+    else if(state.currentView==='record') await renderRecordForm();
+  }
+  async function approveAndLock(recordId=state.currentRecordId,note=null){ const id=recordId; if(!id||!reviewerUi())return; const reviewNote=note===null?($('#review_note')?.value.trim()||null):note; if(!await qcConfirmCentered('ยืนยันว่าตรวจทวนข้อมูลและหลักฐานแล้ว และอนุมัติให้ LOCK รายการนี้?',{title:'อนุมัติและ LOCK Platelet',acceptText:'อนุมัติและ LOCK'}))return; try{const {error}=await state.sb.from('platelet_records').update({status:'locked',review_note:reviewNote}).eq('id',id);if(error)throw error;await loadRecords();showToast('ทบทวนและ LOCK แล้ว','good');if($('#detailDialog')?.open) $('#detailDialog').close(); await refreshAfterReviewAction();}catch(e){showToast(errText(e),'error');} }
+  async function returnForCorrection(recordId=state.currentRecordId,note=null){ const id=recordId; if(!id||!reviewerUi())return; const reviewNote=(note===null?$('#review_note')?.value:note)?.trim(); if(!reviewNote){showToast('กรุณาระบุเหตุผลที่ส่งกลับแก้ไข','error');($('#review_note')||$('#detail_review_note'))?.focus();return;} if(!await qcConfirmCentered('ส่งรายการนี้กลับเป็น Draft ให้เจ้าหน้าที่แก้ไข?',{title:'ส่งกลับแก้ไข Platelet',acceptText:'ส่งกลับแก้ไข',acceptClass:'danger'}))return; try{const {error}=await state.sb.from('platelet_records').update({status:'draft',review_note:reviewNote}).eq('id',id);if(error)throw error;await loadRecords();showToast('ส่งกลับให้แก้ไขแล้ว','good');if($('#detailDialog')?.open) $('#detailDialog').close(); await refreshAfterReviewAction();}catch(e){showToast(errText(e),'error');} }
+  async function unlockRecord(){ const reason=await qcPromptCentered('ระบุเหตุผลที่ต้องปลดล็อก', {title:'ปลดล็อกรายการ Platelet',placeholder:'เหตุผลที่ต้องปลดล็อก',required:true,multiline:true,acceptText:'ปลดล็อก'});if(!reason?.trim())return; try{const {error}=await state.sb.from('platelet_records').update({status:'draft',last_unlock_reason:reason.trim()}).eq('id',state.currentRecordId);if(error)throw error;await loadRecords();showToast('ปลดล็อกแล้ว ระบบเพิ่ม Revision ใหม่','good');await renderRecordForm();}catch(e){showToast(errText(e),'error');} }
+  async function adminDeleteRecord(id){
+    if(!adminUi())return;
+    const reason=await qcPromptCentered('ระบุเหตุผลที่ลบรายการ', {title:'ลบรายการ Platelet',placeholder:'เช่น สร้าง Product No. ซ้ำ / บันทึกรายการผิดคน',required:true,multiline:true,acceptText:'ถัดไป',acceptClass:'danger'});
+    if(!reason?.trim())return;
+    if(!await qcConfirmCentered('ยืนยันลบรายการนี้ออกจากรายการใช้งาน? ข้อมูลและหลักฐานจะยังเก็บไว้เพื่อ Audit',{title:'ยืนยันลบรายการ Platelet',acceptText:'ยืนยันลบ',acceptClass:'danger'}))return;
+    try{
+      const {error}=await state.sb.from('platelet_records').update({deleted_at:new Date().toISOString(),deleted_by:state.user.id,delete_reason:reason.trim()}).eq('id',id);if(error)throw error;
+      await loadRecords();showToast('ลบรายการแล้ว และเก็บประวัติไว้ใน Audit Log','good');$('#detailDialog')?.close();switchView('records');
+    }catch(e){showToast(errText(e),'error');}
+  }
+  async function adminRestoreRecord(id){
+    if(!adminUi())return;
+    const reason=await qcPromptCentered('ระบุเหตุผลที่กู้คืนรายการ', {title:'กู้คืนรายการ Platelet',placeholder:'เหตุผลที่กู้คืน',required:true,multiline:true,acceptText:'กู้คืนรายการ'});if(!reason?.trim())return;
+    try{
+      const {error}=await state.sb.from('platelet_records').update({deleted_at:null,deleted_by:null,delete_reason:null,last_admin_edit_reason:reason.trim(),last_admin_edit_id:crypto.randomUUID()}).eq('id',id);if(error)throw error;
+      await loadRecords();showToast('กู้คืนรายการแล้ว','good');$('#detailDialog')?.close();switchView('records');
+    }catch(e){showToast(errText(e),'error');}
+  }
+
+  async function openDetail(id){
+    try{
+      ensureDetailDialogShell(); // RBC detail uses a different dialog layout; restore it before writing Platelet fields.
+      const {data:r,error}=await state.sb.from('platelet_records').select('*').eq('id',id).single();if(error)throw error;
+      const [{data:pool},{data:ev},{data:audit}]=await Promise.all([
+        state.sb.from('pool_units').select('*').eq('record_id',id).order('position'),
+        state.sb.from('evidence_files').select('*').eq('record_id',id).order('created_at'),
+        adminUi()?state.sb.from('audit_logs').select('*').eq('record_id',id).order('created_at',{ascending:false}).limit(100):Promise.resolve({data:[]})
+      ]);
+      $('#detailTitle').textContent=r.product_no;$('#detailSubtitle').textContent=`${r.product_type} · ${purposeTH(r.record_purpose)} · Revision ${r.revision}`;
+      logActivity('view_record','record',r.id,{product_no:r.product_no,product_type:r.product_type,purpose:r.record_purpose}).catch(()=>{});
+      const canEdit=!r.deleted_at&&(adminUi()||(r.status==='draft'&&staffWriteUi()));
+      const canReview=!r.deleted_at&&r.record_purpose==='qc'&&r.status==='submitted'&&reviewerUi();
+      const sectionMeta=(measuredAt,by,recordedAt)=>{
+        const parts=[];
+        if(measuredAt) parts.push(`<span class="detail-meta-chip"><b>วันที่ตรวจ</b> ${esc(dateTH(measuredAt))}</span>`);
+        if(by) parts.push(`<span class="detail-meta-chip"><b>ผู้กรอกผล</b> ${esc(profileName(by))}</span>`);
+        if(recordedAt) parts.push(`<span class="detail-meta-chip"><b>บันทึกล่าสุด</b> ${esc(dateTH(recordedAt))}</span>`);
+        return parts.join('');
+      };
+      const prepMeta=sectionMeta(null,r.prep_recorded_by||r.created_by,r.prep_recorded_at||r.created_at);
+      const pltHasResult=r.plt_value_1!=null||r.plt_value_2!=null;
+      const wbcHasResult=r.wbc_adam!=null;
+      const phHasResult=r.ph_value!=null;
+      const pltMeta=pltHasResult?sectionMeta(r.plt_measured_at,r.plt_recorded_by,r.plt_recorded_at):'';
+      const wbcMeta=wbcHasResult?sectionMeta(r.wbc_measured_at,r.wbc_recorded_by,r.wbc_recorded_at):'';
+      const phMeta=phHasResult?sectionMeta(r.ph_measured_at,r.ph_recorded_by,r.ph_recorded_at):'';
+      const detailEvidence=(cat)=>{
+        const rows=(ev||[]).filter(x=>x.category===cat);
+        if(!rows.length)return '<div class="measurement-evidence-empty">ยังไม่มีหลักฐาน</div>';
+        return `<div class="detail-section-evidence"><div class="detail-evidence-title">หลักฐาน</div>${rows.map(x=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(x.original_name)}</strong><small>ผู้แนบหลักฐาน ${esc(profileName(x.uploaded_by))} · ${esc(dateTH(x.created_at))}</small>${x.change_reason?`<small class="evidence-reason">เหตุผล Admin: ${esc(x.change_reason)}</small>`:''}</span><button class="btn small-btn detail-evidence" data-path="${esc(x.storage_path)}">ดู</button></div>`).join('')}</div>`;
+      };
+      const poolRows=(pool||[]).map(x=>`<tr><td>${x.position}</td><td>${esc(x.unit_no)}</td><td>${fmt(x.pyi,2)}</td><td>${esc(profileName(x.updated_by||x.created_by))}</td><td class="nowrap">${esc(dateTH(x.updated_at||x.created_at))}</td></tr>`).join('');
+      $('#detailBody').innerHTML=`<div class="status-line">${purposeBadge(r.record_purpose)} ${deletedBadge(r)} ${statusBadge(r.status)} ${qcBadgeForRecord(r)} ${pHBadge(r)} ${plateletTaskSummaryBadge(r)}</div>
+      ${r.ph_value==null&&r.status!=='draft'&&!r.deleted_at?`<div class="notice warning">pH ยังไม่ได้บันทึก แต่รายการมีสถานะ ${esc(statusTH(r.status))} · ต้องให้แพทย์ส่งกลับแก้ไขหรือให้ Admin จัดการตามสิทธิ์ก่อนบันทึก pH</div>`:''}
+      ${r.deleted_at?`<div class="notice bad"><strong>ลบออกจากรายการใช้งานแล้ว</strong><br>${esc(r.delete_reason||'–')} · ${dateTH(r.deleted_at)} · ${esc(profileName(r.deleted_by))}</div>`:''}
+
+      <section class="detail-section">
+        <div class="detail-section-head"><div><h3>ข้อมูลการเตรียม</h3><p>ข้อมูลผลิตภัณฑ์และค่าที่ใช้คำนวณ Volume</p></div><div class="detail-section-meta">${prepMeta}</div></div>
+        <div class="detail-grid">${dcell('ประเภท',purposeTH(r.record_purpose))}${dcell('กำหนดประเภทเมื่อ',dateTH(r.purpose_selected_at))}${dcell('กำหนดประเภทโดย',profileName(r.purpose_selected_by))}${dcell('Group',r.blood_group)}${dcell('วัน-เวลาเริ่มเจาะ',dateTH(r.collection_at))}${dcell('วัน-เวลาหมดอายุ',dateTH(r.expiry_at))}${dcell('ค่าที่เจ้าหน้าที่กรอก',fmt(qcVolumeOriginal(r,'volume_input_unit','volume_input_value','gross_weight_g','volume_ml').value,2)+' '+qcVolumeUnit(r.volume_input_unit))}${dcell('น้ำหนักถุงเปล่า',fmt(r.bag_tare_weight_g,2)+' g')}${dcell('Density',fmt(r.density,2))}${dcell('Volume',fmt(r.volume_ml,2)+' mL')}</div>
+      </section>
+
+      ${pool?.length?`<section class="detail-section"><div class="detail-section-head"><div><h3>Pool LDPPC</h3><p>แสดงผู้บันทึกและเวลาของแต่ละ Unit</p></div><div class="detail-section-meta"><span class="detail-meta-chip"><b>Pool PYI</b> ${fmt(r.pool_pyi,2)}</span><span class="detail-meta-chip"><b>ฉลาก</b> ${esc(poolReleaseTH(r.pool_release_status))}</span></div></div><div class="table-wrap"><table class="data-table detail-pool-table"><thead><tr><th>#</th><th>Unit No.</th><th>PYI</th><th>ผู้กรอก</th><th>เวลาบันทึก</th></tr></thead><tbody>${poolRows}</tbody></table></div></section>`:''}
+
+      <section class="detail-section measurement-section">
+        <div class="detail-section-head"><div><h3>CBC / Platelet</h3><p>ผลตรวจ Platelet และค่าที่ใช้คำนวณ Yield</p></div><div class="detail-section-meta">${pltMeta||'<span class="detail-meta-chip muted-chip">ยังไม่มีผล</span>'}</div></div>
+        <div class="detail-grid">${dcell('เครื่อง CBC',r.plt_instrument)}${dcell('PLT ที่ใช้',r.plt_used==null?'–':fmt(r.plt_used,2)+' K/µL')}${dcell('Platelet yield',r.platelet_yield==null?'–':fmt(r.platelet_yield,3)+' ×10¹¹ cells/unit')}${dcell('Equivalent Units',fmt(r.equivalent_units,2))}</div>
+        <div class="table-wrap platelet-detail-repeat-wrap"><table class="data-table platelet-repeat-table"><thead><tr><th></th><th>PLT (K/µL)</th></tr></thead><tbody><tr><th>เครื่องที่ 1</th><td>${r.plt_value_1==null?'–':fmt(r.plt_value_1,2)}</td></tr><tr><th>เครื่องที่ 2</th><td>${r.plt_value_2==null?'–':fmt(r.plt_value_2,2)}</td></tr></tbody></table></div>
+        ${detailEvidence('cbc')}
+      </section>
+
+      <section class="detail-section measurement-section">
+        <div class="detail-section-head"><div><h3>ADAM / WBC</h3><p>ผล WBC และ Residual WBC</p></div><div class="detail-section-meta">${wbcMeta||'<span class="detail-meta-chip muted-chip">ยังไม่มีผล</span>'}</div></div>
+        <div class="detail-grid">${dcell('WBC ADAM',r.wbc_adam==null?'–':fmt(r.wbc_adam,4)+' /µL')}${dcell('Residual WBC',r.residual_wbc==null?'–':fmt(r.residual_wbc,3)+' ×10⁶ cells/unit')}</div>
+        ${detailEvidence('adam')}
+      </section>
+
+      <section class="detail-section measurement-section">
+        <div class="detail-section-head"><div><h3>pH</h3><p>ค่า pH และวันเวลาที่ตรวจ</p></div><div class="detail-section-meta">${phMeta||'<span class="detail-meta-chip muted-chip">ยังไม่มีผล</span>'}</div></div>
+        <div class="detail-grid">${dcell('pH',fmt(r.ph_value,3))}${r.ph_deviation_reason?dcell('เหตุผลที่ตรวจไม่ตรงวันหมดอายุ',r.ph_deviation_reason):''}</div>
+        ${detailEvidence('ph')}
+      </section>
+
+      ${r.pool_release_status&&r.pool_release_status!=='not_applicable'?`<div class="notice ${['standard','conditional_pass'].includes(r.pool_release_status)?'good':['conditional_pending'].includes(r.pool_release_status)?'warning':'bad'}"><strong>การ Pool / ฉลาก:</strong> ${esc(poolReleaseTH(r.pool_release_status))}${r.pool_release_status==='conditional_pending'?` · ต้องมี Platelet yield ≥ ${fmt(state.settings.pool_conditional_yield_min,2)} ×10¹¹ cells/unit`:''}</div>`:''}
+      ${r.record_purpose==='qc'?`<div class="notice ${plateletEffectiveQcStatus(r)==='pass'?'good':plateletEffectiveQcStatus(r)==='review'?'warning':'info'}"><strong>ผลประเมิน QC:</strong> ${esc(plateletQcLabel(r))}</div>${plateletPhDelayed(r)?`<div class="notice info"><strong>Process deviation:</strong> ตรวจ pH ล่าช้ากว่าวันหมดอายุ${r.ph_deviation_reason?` · เหตุผล: ${esc(r.ph_deviation_reason)}`:' · ยังไม่มีเหตุผลบันทึก'}<br><span class="small">ติดตามความคลาดเคลื่อนตาม SOP แยกจากเกณฑ์คุณภาพผลิตภัณฑ์</span></div>`:''}`:'<div class="compact-status"><span class="badge prepare-purpose">Prepare · ไม่ประเมิน QC</span></div>'}
+      ${r.notes?`<div class="detail-section"><div class="detail-section-head"><div><h3>หมายเหตุ</h3></div></div><div class="detail-note">${esc(r.notes)}</div></div>`:''}
+      ${r.status==='draft'&&r.returned_at&&r.review_note?`<div class="notice warning"><strong>แพทย์ส่งกลับแก้ไข:</strong> ${esc(r.review_note)}<br><span class="small">${esc(profileName(r.returned_by))} · ${esc(dateTH(r.returned_at))}</span></div>`:''}
+      ${r.reviewed_at&&r.status==='locked'?`<div class="notice good"><strong>แพทย์ผู้ทบทวน:</strong> ${esc(profileName(r.reviewed_by))} · ${esc(dateTH(r.reviewed_at))}${r.review_note?`<br><strong>หมายเหตุ:</strong> ${esc(r.review_note)}`:''}</div>`:''}
+      ${canReview?`<section class="detail-section reviewer-action-panel"><div class="detail-section-head"><div><h3>การทบทวนโดยแพทย์</h3><p>ตรวจผลและหลักฐานก่อนตัดสินใจ</p></div></div><div class="field"><label>หมายเหตุการทบทวน</label><textarea id="detail_review_note" placeholder="ถ้าส่งกลับแก้ไข ต้องระบุเหตุผล">${esc(r.review_note||'')}</textarea></div></section>`:''}
+
+      <section class="detail-section workflow-section">
+        <div class="detail-section-head"><div><h3>ลำดับการบันทึก</h3></div></div>
+        <div class="workflow-grid ${r.record_purpose==='prepare'?'prepare-workflow':''}">
+          ${workflowStep(r.record_purpose==='qc'?'สร้างรายการ QC':'บันทึก Prepare',r.created_by,r.created_at)}
+          ${r.record_purpose==='qc'?workflowStep('ส่งให้แพทย์ทบทวน',r.submitted_by,r.submitted_at):''}
+          ${r.record_purpose==='qc'?(r.returned_at?workflowStep('แพทย์ส่งกลับแก้ไข',r.returned_by,r.returned_at):workflowStep('แพทย์ทบทวน / LOCK',r.locked_by||r.reviewed_by,r.locked_at||r.reviewed_at)):''}
+        </div>
+      </section>
+
+      ${adminUi()?`<div class="panel"><h3>Audit trail</h3><div class="timeline">${audit?.length?audit.map(a=>auditItem(a)).join(''):'<div class="muted">ยังไม่มีประวัติ</div>'}</div></div>`:''}
+      <div class="actions">${r.record_purpose==='qc'&&plateletEffectiveQcStatus(r)==='review'?ncActionButton('platelet',r.id):''}<button class="btn" id="detailClose">ปิด</button>${canReview?'<button class="btn danger" id="detailReturn">ส่งกลับแก้ไข</button><button class="btn good" id="detailApprove">อนุมัติและ LOCK</button>':''}${canEdit?`${r.ph_value==null?'<button class="btn good" id="detailPhEdit">บันทึก pH</button>':''}<button class="btn primary" id="detailEdit">เปิดแก้ไข</button>`:''}${adminUi()&&!r.deleted_at?'<button class="btn danger" id="detailDelete">ลบรายการ</button>':''}${adminUi()&&r.deleted_at?'<button class="btn good" id="detailRestore">กู้คืนรายการ</button>':''}</div>`;
+      $$('.detail-evidence').forEach(b=>b.onclick=async()=>{const {data,error}=await state.sb.storage.from('platelet-evidence').createSignedUrl(b.dataset.path,120);if(error)showToast(errText(error),'error');else window.open(data.signedUrl,'_blank','noopener');});
+      bindNcButtons($('#detailBody'));
+      $('#detailClose').onclick=()=>$('#detailDialog').close();
+      if($('#detailReturn')) $('#detailReturn').onclick=()=>returnForCorrection(id,$('#detail_review_note')?.value||'');
+      if($('#detailApprove')) $('#detailApprove').onclick=()=>approveAndLock(id,$('#detail_review_note')?.value||'');
+      if($('#detailEdit'))$('#detailEdit').onclick=()=>{$('#detailDialog').close();state.currentRecordId=id;switchView('record');};
+      if($('#detailPhEdit'))$('#detailPhEdit').onclick=()=>{$('#detailDialog').close();openPlateletPhEntry(id);};
+      if($('#detailDelete'))$('#detailDelete').onclick=()=>adminDeleteRecord(id);
+      if($('#detailRestore'))$('#detailRestore').onclick=()=>adminRestoreRecord(id);
+      $('#detailDialog').showModal();
+    }catch(e){showToast(errText(e),'error');}
+  }
+
+  function workflowStep(label,by,at){
+    const done=!!(by||at);
+    return `<div class="workflow-step ${done?'done':''}"><span class="workflow-dot"></span><div><strong>${esc(label)}</strong><small>${done?`${esc(profileName(by))} · ${esc(dateTH(at))}`:'–'}</small></div></div>`;
+  }
+
+  function dcell(l,v){return `<div class="detail-cell"><span>${l}</span><strong>${esc(v??'–')}</strong></div>`;}
+  function auditItem(a){
+    const who=a.actor_id?profileName(a.actor_id):'ระบบ'; let diff='';
+    const labels={record_purpose:'ประเภท',status:'สถานะ',product_no:'Product No.',product_type:'ผลิตภัณฑ์',blood_group:'Group',collection_at:'วันเวลาเริ่มเจาะ',gross_weight_g:'น้ำหนักเทียบเท่าเพื่อคำนวณ (g)',volume_input_unit:'หน่วยที่เครื่องแสดง',volume_input_value:'ค่าที่เจ้าหน้าที่กรอก',bag_tare_weight_g:'น้ำหนักถุงเปล่า (g)',density:'Density',volume_ml:'Volume (mL)',pool_pyi:'Pool PYI',pool_release_status:'สถานะ Pool / ฉลาก',plt_instrument:'เครื่อง CBC',plt_value_1:'PLT เครื่องที่ 1',plt_value_2:'PLT เครื่องที่ 2',plt_measured_at:'วันเวลาวัด CBC',plt_use_mode:'ค่าที่ใช้คำนวณ',wbc_adam:'WBC ADAM',wbc_measured_at:'วันเวลาวัด ADAM',ph_value:'pH',ph_measured_at:'วันเวลาวัด pH',ph_deviation_reason:'เหตุผล pH',notes:'หมายเหตุ',review_note:'หมายเหตุแพทย์',returned_at:'วันที่ส่งกลับแก้ไข',revision:'Revision',deleted_at:'สถานะการลบ'};
+    if(a.old_data&&a.new_data){const changed=Object.keys(labels).filter(k=>JSON.stringify(a.old_data[k])!==JSON.stringify(a.new_data[k])); if(changed.length)diff=changed.map(k=>`${labels[k]}: ${a.old_data[k]??'–'} → ${a.new_data[k]??'–'}`).join('\n');}
+    return `<div class="timeline-item"><strong>${esc(actionTH(a.action))}</strong><small>${esc(who)} · ${dateTH(a.created_at)}</small>${a.note?`<div class="diff"><strong>เหตุผล:</strong> ${esc(a.note)}</div>`:''}${diff?`<div class="diff">${esc(diff)}</div>`:''}</div>`;
+  }
+
+  async function renderSettings(){
+    if(!adminUi()){location.hash=ROUTES.platelet.dashboard;return;} const s=state.settings;
+    $('#view-settings').innerHTML=`<div class="page-head"><div><div class="breadcrumb"><button class="link-btn" data-go-route="#/">Blood Component QC</button><span>›</span><button class="link-btn" data-go-route="#/platelet">Platelet</button><span>›</span><span>QC Settings</span></div><h1>ตั้งค่า Platelet QC</h1></div><div class="actions"><button class="btn" data-go-route="#/admin/audit">ประวัติการใช้งาน</button></div></div>
+      <div class="panel"><h2>ตั้งค่าเมื่อกรอกเป็น g</h2><p class="section-note">เลือก g: ใช้สูตร (น้ำหนักรวมถุง − น้ำหนักถุงเปล่า) ÷ Density · เลือก mL: ใช้ Volume สุทธิที่เครื่องแสดงโดยตรง และเก็บหน่วย/ค่าเดิมไว้ใน Audit</p><div class="table-wrap"><table class="data-table product-setting-table"><thead><tr><th>ผลิตภัณฑ์</th><th>น้ำหนักถุงเปล่า (g)</th><th>Density</th><th>Pool</th><th></th></tr></thead><tbody>${state.productSettings.filter(x=>x.is_active).map(x=>`<tr data-product-type="${esc(x.product_type)}"><td><strong>${esc(x.product_type)}</strong></td><td><input class="ps-tare" type="number" step="0.01" min="0" value="${esc(x.tare_weight_g)}"></td><td><input class="ps-density" type="number" step="0.001" min="0.001" value="${esc(x.density)}"></td><td>${x.requires_pool?'LDPPC 3–6 Units':'–'}</td><td><button class="btn small-btn ps-save" type="button" data-product="${esc(x.product_type)}">บันทึก</button></td></tr>`).join('')}</tbody></table></div></div>
+      <div class="panel"><h2>เกณฑ์การ Pool และฉลาก LDPPC</h2><p class="section-note">ใช้กับทั้ง Prepare ตามปกติและรายการที่ใช้เป็น QC ไม่เกี่ยวกับการเลือกว่าจะนับรายการนั้นเป็น QC หรือไม่</p><div class="form-grid">${settingField('Pool PYI เกณฑ์ปกติ ≥','s_pool_standard',s.pool_pyi_standard_min)}${settingField('Pool PYI อนุโลมขั้นต่ำ','s_pool_conditional',s.pool_pyi_conditional_min)}${settingField('Platelet yield ช่วงอนุโลม ต้อง ≥','s_pool_yield',s.pool_conditional_yield_min)}</div><div class="notice info small" style="margin-top:12px">ค่าเริ่มต้น: Pool PYI ≥ 280 ผ่านเกณฑ์ปกติ · Pool PYI 260–&lt;280 ให้ Pool ได้กรณีจำเป็น แต่ต้องมี Platelet yield ≥ 2.00 ×10¹¹ cells/unit จึงผ่านสำหรับฉลากปกติ</div></div>
+      <div class="notice warning"><strong>ก่อนเริ่มใช้งานจริง:</strong> ตรวจสอบค่าน้ำหนักถุง/Density เกณฑ์ Pool/ฉลาก และเกณฑ์ QC ให้ตรงกับ WI/ข้อกำหนดที่หน่วยอนุมัติ การเปลี่ยนค่าจะถูกบันทึกใน Audit Log</div>
+      <div class="panel"><h2>เกณฑ์สำหรับรายการที่ใช้เป็น QC</h2><p class="section-note">ใช้ประเมินเฉพาะรายการที่เลือก “ใช้เป็น QC” เท่านั้น รายการ Prepare ตามปกติยังเก็บผลครบแต่ไม่นำไปตัดสิน QC</p><div class="form-grid">${settingField('Platelet yield ขั้นต่ำ','s_yield',s.platelet_yield_min)}${settingField('Equivalent Unit factor','s_factor',s.equivalent_unit_factor)}${settingField('Residual WBC สูงสุด','s_wbc',s.residual_wbc_max)}${settingField('pH ขั้นต่ำ','s_ph',s.ph_min)}${settingField('อายุผลิตภัณฑ์ (วัน)','s_expiry',s.expiry_days,1)}${settingField('PLT ต่างกัน · จุดเตือนเพื่อดูประกอบ (%)','s_diff',s.plt_repeat_diff_max_pct)}</div><div class="switch-row" style="margin-top:14px"><label><input id="s_cbc" type="checkbox" checked disabled> บังคับหลักฐาน CBC</label><label><input id="s_adam" type="checkbox" checked disabled> บังคับหลักฐาน ADAM</label><label><input id="s_ph_ev" type="checkbox" checked disabled> บังคับหลักฐาน pH</label></div><div class="actions" style="margin-top:14px"><button class="btn primary" id="saveSettings">บันทึกเกณฑ์</button></div></div>`;
+    $('#saveSettings').onclick=saveSettings;
+    $$('.ps-save').forEach(b=>b.onclick=()=>saveProductSetting(b.dataset.product));
+    bindRouteButtons($('#view-settings'));
+  }
+
+  async function renderUsers(){
+    if(!adminUi()){location.hash=ROUTES.home;return;} await loadProfiles();
+    $('#view-users').innerHTML=`<div class="page-head"><div><div class="breadcrumb"><button class="link-btn" data-go-route="#/">Blood Component QC</button><span>›</span><span>Admin</span></div><h1>ผู้ใช้งานระบบ</h1><p class="muted">บัญชีเดียวใช้ร่วมกันทุก Module ของ CNMI Blood Component QC</p></div><div class="actions"><button class="btn" data-go-route="#/admin/audit">ประวัติการใช้งาน</button></div></div>
+      <div class="panel"><h2>สร้างบัญชีเจ้าหน้าที่</h2><p class="section-note">Admin สร้างบัญชี @mahidol.ac.th และกำหนดรหัสผ่านชั่วคราว ผู้ใช้จะถูกบังคับให้เปลี่ยนรหัสผ่านเมื่อ Login ครั้งแรก</p>
+        <div class="user-create-grid"><div class="field"><label>Mahidol ID / Username</label><div class="email-field"><input id="new_username" autocomplete="off" placeholder="เช่น somchai.som"><span>@mahidol.ac.th</span></div></div><div class="field"><label>ชื่อ-นามสกุล / ชื่อที่แสดง</label><input id="new_display_name" placeholder="ชื่อที่แสดงในระบบ"></div><div class="field"><label>ตำแหน่ง</label><input id="new_position" placeholder="เช่น นักเทคนิคการแพทย์"></div><div class="field"><label>สิทธิ์</label><select id="new_role"><option value="staff">Staff</option><option value="reviewer">Reviewer (แพทย์)</option><option value="admin">Admin</option></select></div><div class="field user-create-password"><label>รหัสผ่านชั่วคราว</label><input id="new_temp_password" type="password" minlength="8" autocomplete="new-password" placeholder="อย่างน้อย 8 ตัวอักษร"></div><div class="field user-create-action"><label>&nbsp;</label><button class="btn primary" id="createUserBtn" type="button">+ สร้างบัญชี</button></div></div><p id="createUserMessage" class="muted small"></p>
+        <div class="notice info small"><strong>ความปลอดภัย:</strong> การสร้างบัญชีและ Reset password ทำผ่าน Supabase Edge Function เท่านั้น ไม่มี Service Role / Secret key อยู่ใน GitHub Pages</div>
+      </div>
+      <div class="panel"><h2>รายชื่อผู้ใช้งาน</h2><p class="section-note">Reviewer (แพทย์) ใช้สำหรับแพทย์ผู้ทบทวนผล ส่งกลับแก้ไข หรืออนุมัติและ LOCK</p><div class="table-wrap"><table class="data-table users-table"><thead><tr><th>Username</th><th>ชื่อ</th><th>ตำแหน่ง</th><th>Role</th><th>Active</th><th>First Login</th><th>Last Login</th><th>จัดการ</th></tr></thead><tbody>${state.profiles.map(p=>`<tr data-user-id="${p.id}"><td><strong>${esc((p.email||'').split('@')[0])}</strong><div class="muted small">${esc(p.email)}</div></td><td><input class="u-name" value="${esc(p.display_name||'')}"></td><td><input class="u-position" value="${esc(p.position||'')}" placeholder="ตำแหน่ง"></td><td><select class="role-select u-role">${['staff','reviewer','admin'].map(r=>`<option value="${r}" ${p.role===r?'selected':''}>${roleTH(r)}</option>`).join('')}</select></td><td><label class="toggle-cell"><input class="u-active" type="checkbox" ${p.is_active?'checked':''}> <span>${p.is_active?'Active':'ปิดใช้'}</span></label></td><td><span class="password-state ${p.must_change_password?'pending':'ok'}">${p.must_change_password?'รอเปลี่ยนรหัส':'ตั้งรหัสแล้ว'}</span></td><td class="nowrap">${dateTH(p.last_login_at)}</td><td><div class="row-actions"><button class="btn small-btn u-save" data-id="${p.id}">บันทึก</button><button class="btn small-btn u-reset" data-id="${p.id}" ${p.id===state.user.id?'disabled title="ใช้เมนูเปลี่ยนรหัสผ่านของตนเอง"':''}>Reset password</button><button class="btn small-btn u-audit" data-id="${p.id}">Audit</button></div></td></tr>`).join('')}</tbody></table></div></div>`;
+    $('#createUserBtn').onclick=createUserByAdmin;
+    $$('.u-save').forEach(b=>b.onclick=()=>saveUser(b.dataset.id));
+    $$('.u-reset').forEach(b=>b.onclick=()=>openAdminReset(b.dataset.id));
+    $$('.u-audit').forEach(b=>b.onclick=()=>{state.auditUserFilter=b.dataset.id;location.hash=ROUTES.audit;});
+    bindRouteButtons($('#view-users'));
+  }
+  function settingField(l,id,v,step='0.01'){return `<div class="field"><label>${l}</label><input id="${id}" type="number" step="${step}" min="0" value="${esc(v)}"></div>`;}
+  async function createUserByAdmin(){
+    const username=$('#new_username').value.trim().toLowerCase(),display_name=$('#new_display_name').value.trim(),position=$('#new_position').value.trim(),role=$('#new_role').value,password=$('#new_temp_password').value;
+    const msg=$('#createUserMessage');
+    if(!username||username.includes('@')){msg.textContent='กรอกเฉพาะ Mahidol ID เช่น somchai.som';return;}
+    if(!display_name){msg.textContent='กรุณากรอกชื่อที่แสดง';return;}
+    if(password.length<8){msg.textContent='รหัสผ่านชั่วคราวต้องอย่างน้อย 8 ตัวอักษร';return;}
+    msg.textContent='กำลังสร้างบัญชี...';
+    try{await invokeAdminUsers({action:'create_user',username,display_name,position,role,password});msg.textContent='';showToast('สร้างบัญชีเรียบร้อย','good');await loadProfiles();renderUsers();}catch(e){msg.textContent=errText(e);}
+  }
+  function openAdminReset(id){
+    const p=state.profiles.find(x=>x.id===id); if(!p)return; state.resetTargetId=id;
+    $('#adminResetTarget').textContent=`${p.display_name||p.email} · ${p.email}`; $('#adminTempPassword').value='';$('#adminTempPasswordConfirm').value='';$('#adminResetPasswordMessage').textContent='';$('#adminResetPasswordDialog').showModal();
+  }
+  async function saveProductSetting(type){
+    try{ const row=$$('.product-setting-table tbody tr').find(x=>x.dataset.productType===type); if(!row)throw new Error('ไม่พบผลิตภัณฑ์'); const tare=num($('.ps-tare',row).value),density=num($('.ps-density',row).value); if(tare===null||tare<0)throw new Error('น้ำหนักถุงไม่ถูกต้อง'); if(density===null||density<=0)throw new Error('Density ต้องมากกว่า 0'); const {error}=await state.sb.from('platelet_product_settings').update({tare_weight_g:tare,density}).eq('product_type',type); if(error)throw error; await loadProductSettings(); showToast(`บันทึก ${type} แล้ว`,'good'); renderSettings(); }catch(e){showToast(errText(e),'error');}
+  }
+  async function saveSettings(){ try{const payload={pool_pyi_standard_min:num($('#s_pool_standard').value),pool_pyi_conditional_min:num($('#s_pool_conditional').value),pool_conditional_yield_min:num($('#s_pool_yield').value),platelet_yield_min:num($('#s_yield').value),equivalent_unit_factor:num($('#s_factor').value),residual_wbc_max:num($('#s_wbc').value),ph_min:num($('#s_ph').value),expiry_days:Number($('#s_expiry').value),plt_repeat_diff_max_pct:num($('#s_diff').value),require_cbc_evidence:true,require_adam_evidence:true,require_ph_evidence:true}; if(payload.pool_pyi_conditional_min>=payload.pool_pyi_standard_min)throw new Error('Pool PYI อนุโลมขั้นต่ำต้องน้อยกว่าเกณฑ์ปกติ'); if(payload.pool_conditional_yield_min<0)throw new Error('Platelet yield ช่วงอนุโลมไม่ถูกต้อง'); const {error}=await state.sb.from('qc_settings').update(payload).eq('id',1);if(error)throw error;await loadSettings();showToast('บันทึกเกณฑ์แล้ว','good');renderSettings();}catch(e){showToast(errText(e),'error');} }
+  async function saveUser(id){
+    try{
+      const row=$(`tr[data-user-id="${id}"]`); if(!row)throw new Error('ไม่พบแถวผู้ใช้');
+      const payload={display_name:$('.u-name',row).value.trim()||null,position:$('.u-position',row).value.trim()||null,role:$('.u-role',row).value,is_active:$('.u-active',row).checked};
+      if(id===state.user.id&&!payload.is_active)throw new Error('ไม่ควรปิดบัญชี Admin ที่กำลังใช้งานอยู่');
+      const {error}=await state.sb.from('profiles').update(payload).eq('id',id);if(error)throw error;
+      if(id===state.user.id){state.profile={...state.profile,...payload};applyUiMode(false);}
+      showToast('บันทึกผู้ใช้แล้ว','good');await loadProfiles();renderUsers();
+    }catch(e){showToast(errText(e),'error');}
+  }
+  async function renderAuditLog(){
+    if(!adminUi()){switchView('dashboard');return;}
+    await loadProfiles();
+    const {data,error}=await state.sb.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(1000); if(error){showToast(errText(error),'error');return;}
+    const all=data||[];
+    $('#view-audit').innerHTML=`<div class="page-head"><div><h1>ประวัติการใช้งาน (Audit Log)</h1><p class="muted">ทวนสอบว่าใครเข้าระบบ สร้างหรือแก้ไขรายการ เปลี่ยน Prepare/QC แนบหลักฐาน ลบรายการ ส่งตรวจทวน LOCK หรือจัดการระบบ</p></div><div class="actions"><button class="btn" id="auditRefresh">รีเฟรช</button></div></div>
+      <div class="panel"><div class="audit-filters"><select id="auditUser"><option value="">ผู้ใช้ทุกคน</option>${state.profiles.map(p=>`<option value="${p.id}" ${state.auditUserFilter===p.id?'selected':''}>${esc(p.display_name||p.email)}</option>`).join('')}</select><input id="auditSearch" placeholder="ค้นหา action / Product No. / Email"><select id="auditType"><option value="">ทุกประเภท</option><option value="session">Session</option><option value="record">Record</option><option value="pool_units">Pool</option><option value="evidence_files">Evidence</option><option value="profile">Profile</option><option value="settings">Settings</option><option value="product_settings">Product Settings</option><option value="user_admin">User Admin</option><option value="account">Account</option><option value="report">Report</option><option value="plasma_record">Plasma Record</option><option value="plasma_evidence">Plasma Evidence</option><option value="plasma_outlab_batch">Plasma Outlab</option><option value="plasma_settings">Plasma Settings</option><option value="plasma_product_settings">Plasma Product Settings</option><option value="rbc_record">RBC Record</option><option value="rbc_evidence">RBC Evidence</option><option value="rbc_settings">RBC Settings</option><option value="rbc_product_settings">RBC Product Settings</option></select><button class="btn" id="auditClear">ล้างตัวกรอง</button></div><div id="auditHost"></div></div>`;
+    const render=()=>{
+      const uid=$('#auditUser').value,q=$('#auditSearch').value.trim().toLowerCase(),typ=$('#auditType').value;
+      state.auditUserFilter=uid;
+      const rows=all.filter(a=>(!uid||a.actor_id===uid)&&(!typ||a.entity_type===typ)&&(!q||`${a.action} ${a.entity_type} ${JSON.stringify(a.new_data||{})} ${JSON.stringify(a.old_data||{})}`.toLowerCase().includes(q)));
+      $('#auditHost').innerHTML=rows.length?`<div class="table-wrap"><table class="data-table audit-table"><thead><tr><th>วันเวลา</th><th>ผู้ใช้งาน</th><th>การกระทำ</th><th>รายการ/รายละเอียด</th></tr></thead><tbody>${rows.map(a=>`<tr><td class="nowrap">${dateTH(a.created_at)}</td><td><strong>${esc(profileName(a.actor_id))}</strong></td><td><span class="badge draft">${esc(actionTH(a.action))}</span><div class="muted small">${esc(a.entity_type||'-')}</div></td><td>${auditSummary(a)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">ไม่พบ Audit Log ตามเงื่อนไข</div>';
+    };
+    $('#auditUser').addEventListener('change',render);$('#auditSearch').addEventListener('input',render);$('#auditType').addEventListener('change',render);$('#auditClear').onclick=()=>{state.auditUserFilter='';$('#auditUser').value='';$('#auditSearch').value='';$('#auditType').value='';render();};$('#auditRefresh').onclick=()=>renderAuditLog();render();
+  }
+  function auditSummary(a){
+    const n=a.new_data||{},o=a.old_data||{};
+    const product=n.product_no||o.product_no||''; const target=n.email||o.email||n.display_name||o.display_name||'';
+    let headline=product?`${a.module?esc(a.module)+' · ':''}Product: ${esc(product)}`:(target?esc(target):((a.entity_id||a.record_id)?`${a.module?esc(a.module)+' · ':''}Record ${esc(a.entity_id||a.record_id)}`:'-'));
+    const safe={old:o,new:n,note:a.note||null};
+    return `<div>${headline}</div>${a.note?`<div class="audit-note"><strong>เหตุผล:</strong> ${esc(a.note)}</div>`:''}<details class="audit-details"><summary>ดูรายละเอียดค่าก่อน/หลัง</summary><pre>${esc(JSON.stringify(safe,null,2))}</pre></details>`;
+  }
+
+
+  // ===== Plasma / FFP module v5.2.3 =====
+  function plasmaMonthKey(){ return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit'}).format(new Date()).replace('/','-'); }
+  function plasmaBatchById(id){ return state.plasmaBatches.find(x=>x.id===id); }
+  function plasmaModuleReadyNotice(){
+    return `<div class="page-head"><div><h1>Plasma</h1><p class="muted">FFP · Factor VIII QC</p></div></div><div class="notice warning"><strong>Plasma module ยังไม่พร้อม</strong><br>ให้ Admin Run <code>supabase/upgrade_v5_1_0_to_v5_2_0.sql</code> ใน Supabase Project ของ Blood QC ก่อน</div>`;
+  }
+  function renderPlasmaPage(page='dashboard'){
+    if(!state.plasmaReady){ $('#view-module').innerHTML=plasmaModuleReadyNotice(); return; }
+    if(page==='record') return renderPlasmaRecordForm();
+    if(page==='records') return renderPlasmaRecordsList();
+    if(page==='guide') return renderPlasmaGuide();
+    if(page==='settings') return renderPlasmaSettings();
+    return renderPlasmaDashboard();
+  }
+  function plasmaStatusBadge(r){ return `${plasmaQcBadge(r.qc_status)} ${statusBadge(r.status)}`; }
+  function plasmaRecordsTable(rows){
+    if(!rows.length)return '<div class="empty">ยังไม่มีข้อมูล</div>';
+    const table=`<div class="table-wrap"><table class="data-table"><thead><tr><th>Product No.</th><th>ชนิด FFP</th><th>วันที่ผลิต</th><th>Group</th><th>Volume</th><th>Outlab</th><th>Factor VIII</th><th>IU/mL</th><th>QC</th><th>สถานะ</th></tr></thead><tbody>${rows.map(r=>`<tr class="${r.deleted_at?'deleted-row':''}"><td><button class="link-btn plasma-record-link" data-id="${r.id}">${esc(r.product_no)}</button>${r.deleted_at?' <span class="badge deleted">ลบแล้ว</span>':''}</td><td>${esc(r.product_type)}</td><td class="nowrap">${esc(r.manufactured_on||'–')}</td><td>${esc(r.blood_group||'–')}</td><td>${r.volume_ml==null?'–':fmt(r.volume_ml,2)+' mL'}</td><td>${esc(plasmaOutlabState(r))}</td><td>${r.factor_viii_percent==null?'–':fmt(r.factor_viii_percent,1)+' %'}</td><td>${r.factor_viii_iu_ml==null?'–':fmt(r.factor_viii_iu_ml,3)}</td><td>${plasmaQcBadge(r.qc_status)}</td><td>${statusBadge(r.status)}</td></tr>`).join('')}</tbody></table></div>`;
+    const cards=rows.map(r=>`<article class="mobile-data-card ${r.deleted_at?'deleted-row':''}"><div class="mobile-data-card-head"><button class="link-btn plasma-record-link" data-id="${r.id}">${esc(r.product_no)}</button>${r.deleted_at?'<span class="badge deleted">ลบแล้ว</span>':''}</div><div class="mobile-data-card-body">${mobilePair('ชนิด FFP',esc(r.product_type))}${mobilePair('QC',plasmaQcBadge(r.qc_status))}${mobilePair('Outlab',esc(plasmaOutlabState(r)))}${mobilePair('สถานะ',statusBadge(r.status))}<details class="mobile-record-more"><summary>ดูข้อมูล FFP เพิ่มเติม</summary><div class="mobile-record-extra">${mobilePair('วันที่ผลิต',esc(r.manufactured_on||'–'))}${mobilePair('Group',esc(r.blood_group||'–'))}${mobilePair('Volume',r.volume_ml==null?'–':fmt(r.volume_ml,2)+' mL')}${mobilePair('Factor VIII',r.factor_viii_percent==null?'–':fmt(r.factor_viii_percent,1)+' %')}${mobilePair('IU/mL',r.factor_viii_iu_ml==null?'–':fmt(r.factor_viii_iu_ml,3))}</div></details></div></article>`).join('');
+    return responsiveDataTable(table,cards);
+  }
+  function bindPlasmaRecordLinks(root=document){ $$('.plasma-record-link',root).forEach(b=>b.onclick=()=>openPlasmaDetail(b.dataset.id)); }
+  function renderPlasmaDashboard(){
+    const rec=state.plasmaRecords.filter(r=>!r.deleted_at);
+    const ym=state.plasmaDashboardMonth||plasmaMonthKey();state.plasmaDashboardMonth=ym;
+    const month=rec.filter(r=>monthKeyFromDateString(r.manufactured_on)===ym);
+    const noBatch=rec.filter(r=>r.status==='draft'&&!r.outlab_batch_id).length;
+    const waiting=rec.filter(r=>r.outlab_batch_id&&r.factor_viii_percent==null).length;
+    const review=month.filter(r=>r.status==='submitted').length;
+    const locked=month.filter(r=>r.status==='locked').length;
+    const target=4;
+    const products=state.plasmaProductSettings.filter(x=>x.is_active).sort((a,b)=>(a.sort_order??100)-(b.sort_order??100)||String(a.product_type).localeCompare(String(b.product_type)));
+    const tracking=products.map(ps=>{const done=month.filter(r=>r.product_type===ps.product_type).length;return {product_type:ps.product_type,done,remaining:Math.max(0,target-done),complete:done>=target};});
+    const typesComplete=tracking.filter(x=>x.complete).length;
+    const trackingCards=tracking.map(x=>`<button type="button" class="type-progress-card dashboard-product-card plasma-progress-card ${x.complete?'complete':''}" data-product-type="${esc(x.product_type)}"><div class="type-progress-head"><div><strong>${esc(x.product_type)}</strong><small>${x.done}/4 ถุง</small></div><span class="badge ${x.complete?'pass':'incomplete'}">${x.complete?'ครบ':`เหลือ ${x.remaining}`}</span></div><div class="tracking-bar"><span style="width:${Math.min(100,x.done/target*100)}%"></span></div><div class="type-progress-foot"><span>ทำ QC แล้ว <b>${x.done}</b></span><span>เป้าหมาย 4</span></div></button>`).join('');
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>ภาพรวม Plasma</h1><p class="muted">FFP · Factor VIII QC</p></div><div class="actions"><input id="plasmaDashMonth" class="month-input" type="month" value="${esc(ym)}"><button class="btn" data-go-route="#/plasma/guide">คู่มือ FFP</button>${staffWriteUi()?'<button class="btn" id="plasmaBatchBtn">+ สร้างใบนำส่ง</button><button class="btn primary" id="plasmaNewBtn">+ บันทึก FFP</button>':''}</div></div>
+      <div class="grid cards">${metric('เดือนนี้',month.length,'รายการ FFP QC')}${metric('ครบ 4 ถุง',`${typesComplete}/${products.length||0}`,'แยกตามชนิด FFP')}${metric('รอผล Factor VIII',waiting,'ส่ง Outlab แล้ว')}${metric('รอตรวจทวน',review,'Submitted')}${metric('ทบทวนเสร็จสิ้น',locked,'แพทย์ทบทวนและปิดผลแล้ว')}</div>
+      <div class="panel qc-tracking-panel"><div class="section-title-row"><div><h2>ติดตาม FFP QC รายเดือน แยกชนิด</h2><p class="muted small">แต่ละชนิด FFP มีเป้าหมาย 4 ถุงต่อเดือน · คลิกการ์ดเพื่อดูรายละเอียด</p></div></div><div class="type-progress-grid">${trackingCards||'<div class="empty">ยังไม่มีชนิด FFP ที่เปิดใช้งาน</div>'}</div></div>
+      <div class="panel"><h2>รายการล่าสุด</h2>${plasmaRecordsTable(rec.slice(0,12))}</div>
+      ${plasmaRecentBatchesPanel()}`;
+    $('#plasmaDashMonth').onchange=e=>{state.plasmaDashboardMonth=e.target.value||plasmaMonthKey();renderPlasmaDashboard();};
+    if($('#plasmaNewBtn'))$('#plasmaNewBtn').onclick=()=>{state.currentPlasmaRecordId=null;location.hash=ROUTES.plasma.record;};
+    if($('#plasmaBatchBtn'))$('#plasmaBatchBtn').onclick=openPlasmaBatchBuilder;
+    $$('.plasma-progress-card',$('#view-module')).forEach(b=>b.onclick=()=>openPlasmaProductSummary(b.dataset.productType,ym));
+    bindRouteButtons($('#view-module'));bindPlasmaRecordLinks($('#view-module'));bindPlasmaBatchPdf($('#view-module'));bindPlasmaBatchPager();
+  }
+  async function openPlasmaProductSummary(productType,ym){
+    await loadStaffPlannerOwners(ym);
+    const dlg=ensureDetailDialogShell(),rows=state.plasmaRecords.filter(r=>!r.deleted_at&&r.product_type===productType&&String(r.manufactured_on||'').slice(0,7)===ym).sort((a,b)=>String(a.manufactured_on||'').localeCompare(String(b.manufactured_on||''))||String(a.created_at||'').localeCompare(String(b.created_at||'')));
+    const target=4,done=rows.length;
+    $('#detailTitle').textContent=`FFP QC · ${productType}`;
+    $('#detailSubtitle').textContent=`${plateletMonthLabel(ym)} · ทำ QC แล้ว ${done}/${target} ถุง`;
+    const weekDisplay=monthlyQcWeeklyPopupHtml(ym,productType,rows,'plasma');
+    $('#detailSubtitle').textContent=`${plateletMonthLabel(ym)} · ทำ QC แล้ว ${done}/${target} ถุง · ครอบคลุม ${weekDisplay.coveredWeeks}/4 สัปดาห์${weekDisplay.missingDateCount?` · รอวันที่กรอง ${weekDisplay.missingDateCount} ถุง`:''}`;
+    $('#detailBody').innerHTML=`${plannedOwnerSummaryHtml(ym,'plasma',productType)}${weekDisplay.html}<div class="actions platelet-week-popup-footer"><button type="button" class="btn" id="plasmaSummaryClose">ปิด</button></div>`;
+    $$('.plasma-summary-open',$('#detailBody')).forEach(b=>b.onclick=()=>{dlg.close();openPlasmaDetail(b.dataset.id);}); $('#plasmaSummaryClose').onclick=()=>dlg.close(); dlg.showModal();
+  }
+
+  function sortedPlasmaBatches(){
+    const rows=[...state.plasmaBatches].filter(b=>adminUi()&&state.showDeletedPlasmaBatches?true:!b.deleted_at);
+    return rows.sort((a,b)=>{
+      const bt=new Date(b.sent_at||b.created_at||0).getTime()||0,at=new Date(a.sent_at||a.created_at||0).getTime()||0;
+      if(bt!==at)return bt-at;
+      const bc=new Date(b.created_at||0).getTime()||0,ac=new Date(a.created_at||0).getTime()||0;
+      if(bc!==ac)return bc-ac;
+      return String(b.batch_no||'').localeCompare(String(a.batch_no||''));
+    });
+  }
+  function plasmaRecentBatchesPanel(){
+    const all=sortedPlasmaBatches(),pageSize=5,totalPages=Math.max(1,Math.ceil(all.length/pageSize));
+    state.plasmaBatchPage=Math.min(Math.max(1,Number(state.plasmaBatchPage)||1),totalPages);
+    const start=(state.plasmaBatchPage-1)*pageSize,rows=all.slice(start,start+pageSize);
+    const pager=all.length>pageSize?`<div class="batch-pager"><button class="btn small-btn" id="plasmaBatchPrev" ${state.plasmaBatchPage<=1?'disabled':''}>‹ ก่อนหน้า</button><strong>หน้า ${state.plasmaBatchPage}/${totalPages}</strong><button class="btn small-btn" id="plasmaBatchNext" ${state.plasmaBatchPage>=totalPages?'disabled':''}>ถัดไป ›</button></div>`:'';
+    return `<div class="panel"><div class="section-title-row"><h2>ชุดนำส่งล่าสุด</h2>${adminUi()?`<label class="inline-check"><input type="checkbox" id="plasmaShowDeletedBatches" ${state.showDeletedPlasmaBatches?'checked':''}> แสดงชุดที่ยกเลิกแล้ว</label>`:''}</div>${plasmaBatchesTable(rows)}${pager}</div>`;
+  }
+  function bindPlasmaBatchPager(){
+    const prev=$('#plasmaBatchPrev'),next=$('#plasmaBatchNext');
+    if(prev)prev.onclick=()=>{state.plasmaBatchPage=Math.max(1,state.plasmaBatchPage-1);renderPlasmaDashboard();};
+    if(next)next.onclick=()=>{state.plasmaBatchPage+=1;renderPlasmaDashboard();};
+    const del=$('#plasmaShowDeletedBatches');if(del)del.onchange=e=>{state.showDeletedPlasmaBatches=e.target.checked;state.plasmaBatchPage=1;renderPlasmaDashboard();};
+  }
+
+function plasmaBatchRecords(batchId){
+  return state.plasmaRecords.filter(r=>r.outlab_batch_id===batchId&&!r.deleted_at);
+}
+function plasmaBatchSnapshotProducts(b){
+  const snap=Array.isArray(b?.deleted_products)?b.deleted_products:[];
+  return snap.map(x=>String(x?.product_no||'').trim()).filter(Boolean);
+}
+function canEditPlasmaBatch(b){
+  if(!b||b.deleted_at||!staffWriteUi())return false;
+  if(!(adminUi()||b.prepared_by===state.user?.id))return false;
+  const rows=plasmaBatchRecords(b.id);
+  return rows.length>0&&rows.every(r=>r.status==='draft'&&r.factor_viii_percent==null);
+}
+function canDeletePlasmaBatch(b){
+  if(!b||b.deleted_at||!adminUi())return false;
+  const rows=plasmaBatchRecords(b.id);
+  // Admin must also be able to clean up empty/test batches (e.g. a batch created with 0 linked records).
+  // Empty rows are safe to cancel because there is no QC result/review state to preserve.
+  return rows.every(r=>r.status==='draft'&&r.factor_viii_percent==null);
+}
+function plasmaBatchesTable(rows){
+  if(!rows.length)return '<div class="empty">ยังไม่มีชุดนำส่ง</div>';
+  const table=`<div class="table-wrap"><table class="data-table"><thead><tr><th>ชุดนำส่ง</th><th>วัน-เวลานำส่ง</th><th>Product No.</th><th>ผู้เตรียม</th><th>จำนวน</th><th></th></tr></thead><tbody>${rows.map(b=>{const rr=plasmaBatchRecords(b.id);const snap=plasmaBatchSnapshotProducts(b);const deleted=!!b.deleted_at;const n=deleted?(Number(b.deleted_record_count)||snap.length):rr.length;const nums=(deleted?snap:rr.map(r=>r.product_no)).slice(0,4).map(esc).join(', ')+(n>4?` +${n-4}`:'');const edit=canEditPlasmaBatch(b)?`<button class="btn small-btn plasma-batch-edit" data-id="${b.id}">แก้ไข</button>`:'';const del=canDeletePlasmaBatch(b)?`<button class="btn small-btn danger-soft plasma-batch-delete" data-id="${b.id}">ยกเลิก</button>`:'';return `<tr class="${deleted?'deleted-row':''}"><td><strong>${esc(b.batch_no)}</strong>${deleted?' <span class="badge deleted">ยกเลิกแล้ว</span>':''}${deleted&&b.delete_reason?`<div class="muted small">เหตุผล: ${esc(b.delete_reason)}</div>`:''}</td><td class="nowrap">${esc(dateTH(b.sent_at))}</td><td>${nums||'–'}</td><td>${esc(profileName(b.prepared_by))}</td><td>${n}</td><td><span class="batch-actions">${deleted?'':`<button class="btn small-btn plasma-batch-pdf" data-id="${b.id}">PDF</button>`}${edit}${del}</span></td></tr>`}).join('')}</tbody></table></div>`;
+  const cards=rows.map(b=>{const rr=plasmaBatchRecords(b.id);const snap=plasmaBatchSnapshotProducts(b);const deleted=!!b.deleted_at;const n=deleted?(Number(b.deleted_record_count)||snap.length):rr.length;const nums=(deleted?snap:rr.map(r=>r.product_no)).slice(0,4).map(esc).join(', ')+(n>4?` +${n-4}`:'');const edit=canEditPlasmaBatch(b)?`<button class="btn small-btn plasma-batch-edit" data-id="${b.id}">แก้ไข</button>`:'';const del=canDeletePlasmaBatch(b)?`<button class="btn small-btn danger-soft plasma-batch-delete" data-id="${b.id}">ยกเลิก</button>`:'';return `<article class="mobile-data-card ${deleted?'deleted-row':''}"><div class="mobile-data-card-head"><strong>${esc(b.batch_no)}</strong><span class="badge ${deleted?'deleted':''}">${deleted?'ยกเลิกแล้ว':`${n} รายการ`}</span></div><div class="mobile-data-card-body">${mobilePair('วัน-เวลานำส่ง',esc(dateTH(b.sent_at)))}${mobilePair('Product No.',nums||'–')}${mobilePair('ผู้เตรียม',esc(profileName(b.prepared_by)))}${mobilePair('จำนวน',String(n))}${deleted?mobilePair('เหตุผลที่ยกเลิก',esc(b.delete_reason||'–')):''}</div><div class="mobile-card-actions">${deleted?'':`<button class="btn small-btn plasma-batch-pdf" data-id="${b.id}">PDF</button>`}${edit}${del}</div></article>`;}).join('');
+  return responsiveDataTable(table,cards);
+}
+function bindPlasmaBatchPdf(root=document){
+  $$('.plasma-batch-pdf',root).forEach(b=>b.onclick=()=>printPlasmaOutlabBatch(b.dataset.id));
+  $$('.plasma-batch-edit',root).forEach(b=>b.onclick=()=>openPlasmaBatchBuilder(null,b.dataset.id));
+  $$('.plasma-batch-delete',root).forEach(b=>b.onclick=()=>openPlasmaBatchDeleteDialog(b.dataset.id));
+}
+function openPlasmaBatchDeleteDialog(batchId){
+  if(!adminUi())return;
+  const b=plasmaBatchById(batchId);if(!b||b.deleted_at)return;
+  if(!canDeletePlasmaBatch(b)){showToast('ยกเลิกได้เฉพาะชุดที่ยังไม่มีผล Factor VIII และยังไม่ส่งแพทย์/LOCK','error');return;}
+  const dlg=ensureDetailDialogShell();
+  $('#detailTitle').textContent='ยกเลิกชุดนำส่ง';
+  $('#detailSubtitle').textContent=`${b.batch_no} · ${plasmaBatchRecords(b.id).length ? 'รายการจะกลับไปรอจัดชุดนำส่งใหม่' : 'ชุดว่าง/ชุดทดสอบจะถูกเก็บเป็นประวัติการยกเลิก'}`;
+  $('#detailBody').innerHTML=`<div class="notice warning"><strong>ข้อมูลจะไม่ถูกลบออกจากฐานข้อมูล</strong><br>ระบบจะเก็บเลขชุดเดิม ผู้ยกเลิก วันเวลา เหตุผล และ Product No. เดิมไว้สำหรับ Audit</div><div class="field"><label>เหตุผลที่ยกเลิก <span class="required-star">*</span></label><select id="batchDeleteReasonType"><option value="">กรุณาเลือกเหตุผล</option><option value="ทดสอบระบบ">ทดสอบระบบ</option><option value="สร้างซ้ำ">สร้างซ้ำ</option><option value="เลือก Product No. ผิด">เลือก Product No. ผิด</option><option value="วัน-เวลานำส่งผิด">วัน-เวลานำส่งผิด</option><option value="อื่น ๆ">อื่น ๆ</option></select></div><div class="field hidden" id="batchDeleteOtherWrap"><label>ระบุเหตุผลอื่น</label><textarea id="batchDeleteReasonOther" placeholder="ระบุเหตุผลที่ต้องยกเลิกชุดนำส่ง"></textarea></div><div class="actions"><button type="button" class="btn" id="batchDeleteCancel">กลับ</button><button type="button" class="btn danger" id="batchDeleteConfirm">ยืนยันยกเลิกชุดนำส่ง</button></div>`;
+  $('#batchDeleteReasonType').onchange=e=>$('#batchDeleteOtherWrap').classList.toggle('hidden',e.target.value!=='อื่น ๆ');
+  $('#batchDeleteCancel').onclick=()=>dlg.close();
+  $('#batchDeleteConfirm').onclick=async()=>{const t=$('#batchDeleteReasonType').value,other=$('#batchDeleteReasonOther').value.trim(),reason=t==='อื่น ๆ'?other:t;if(!reason){showToast('กรุณาระบุเหตุผลที่ยกเลิก','error');return;}if(!await qcConfirmCentered(`ยืนยันยกเลิก ${b.batch_no}?\n\nหากมีรายการ FFP ในชุดนี้ ระบบจะคืนรายการกลับไปสถานะรอจัดชุดนำส่ง`,{title:'ยกเลิกชุดนำส่ง',acceptText:'ยืนยันยกเลิก',acceptClass:'danger'}))return;await adminDeletePlasmaBatch(batchId,reason);};
+  dlg.showModal();
+}
+async function adminDeletePlasmaBatch(batchId,reason){
+  if(!adminUi()||!reason?.trim())return;
+  try{
+    const {error}=await state.sb.rpc('soft_delete_plasma_outlab_batch',{p_batch_id:batchId,p_reason:reason.trim()});
+    if(error)throw error;
+    await logActivity('delete_outlab_batch','plasma_outlab_batch',batchId,{reason:reason.trim()});
+    await Promise.all([reloadPlasmaRecords(),reloadPlasmaBatches()]);state.plasmaBatchPage=1;$('#detailDialog').close();showToast('ยกเลิกชุดนำส่งแล้ว · เก็บประวัติ Audit ไว้','good');if(state.currentModule==='plasma')renderPlasmaPage(state.currentPage||'dashboard');
+  }catch(e){showToast(errText(e),'error');}
+}
+
+  function renderPlasmaRecordsList(){
+    const del=adminUi()?`<label class="inline-check"><input type="checkbox" id="pfDeleted" ${state.showDeletedPlasma?'checked':''}> แสดงรายการที่ลบแล้ว</label>`:'';
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>รายการ FFP</h1><p class="muted">Plasma · Factor VIII QC</p></div><div class="actions"><button class="btn" id="plasmaCsv">Export CSV</button><button class="btn" data-go-route="#/plasma/guide">คู่มือ FFP</button>${staffWriteUi()?'<button class="btn" id="plasmaBatchBtn">+ สร้างใบนำส่ง</button><button class="btn primary" id="plasmaNewBtn">+ บันทึก FFP</button>':''}</div></div><div class="panel"><div class="filters"><input id="pfSearch" placeholder="ค้นหา Product No."><select id="pfProduct"><option value="">ทุกชนิด FFP</option>${activePlasmaProducts().map(x=>`<option>${esc(x.product_type)}</option>`).join('')}</select><select id="pfOutlab"><option value="">ทุกสถานะ Outlab</option><option value="no_batch">รอจัดชุดนำส่ง</option><option value="waiting">รอผล Factor VIII</option><option value="result">ได้รับผลแล้ว</option></select><select id="pfQc"><option value="">ทุกผล QC</option><option value="pass">ผ่าน</option><option value="review">ต้องตรวจสอบ</option><option value="incomplete">ข้อมูลไม่ครบ</option></select><select id="pfStatus"><option value="">ทุกสถานะ</option><option value="draft">Draft</option><option value="submitted">รอตรวจทวน</option><option value="locked">LOCK</option></select><button class="btn" id="pfClear">ล้าง</button></div>${del}<div id="plasmaTableHost" style="margin-top:12px"></div></div>`;
+    const apply=()=>{ const q=$('#pfSearch').value.trim().toLowerCase(),prod=$('#pfProduct').value,out=$('#pfOutlab').value,qc=$('#pfQc').value,st=$('#pfStatus').value; if($('#pfDeleted'))state.showDeletedPlasma=$('#pfDeleted').checked; const rows=state.plasmaRecords.filter(r=>(state.showDeletedPlasma||!r.deleted_at)&&(!q||`${r.product_no} ${r.product_type}`.toLowerCase().includes(q))&&(!prod||r.product_type===prod)&&(!qc||rbcEffectiveQcStatus(r)===qc)&&(!st||r.status===st)&&(!out||(out==='no_batch'&&!r.outlab_batch_id)||(out==='waiting'&&r.outlab_batch_id&&r.factor_viii_percent==null)||(out==='result'&&r.factor_viii_percent!=null))); $('#plasmaTableHost').innerHTML=plasmaRecordsTable(rows);bindPlasmaRecordLinks($('#plasmaTableHost'));return rows; };
+    ['#pfSearch','#pfProduct','#pfOutlab','#pfQc','#pfStatus'].forEach(x=>$(x).addEventListener('input',apply)); if($('#pfDeleted'))$('#pfDeleted').addEventListener('change',apply);
+    $('#pfClear').onclick=()=>{['#pfSearch','#pfProduct','#pfOutlab','#pfQc','#pfStatus'].forEach(x=>$(x).value='');if($('#pfDeleted')){$('#pfDeleted').checked=false;state.showDeletedPlasma=false;}apply();};
+    $('#plasmaCsv').onclick=()=>exportPlasmaCSV(apply());
+    if($('#plasmaBatchBtn'))$('#plasmaBatchBtn').onclick=openPlasmaBatchBuilder;
+    if($('#plasmaNewBtn'))$('#plasmaNewBtn').onclick=()=>{state.currentPlasmaRecordId=null;location.hash=ROUTES.plasma.record;};
+    apply();
+  }
+  function exportPlasmaCSV(rows){
+    const h=['Product No.','Product','Group','Mfg date','Expiry','Centrifuge','Prep time','Input unit','Original entry value','Gross equivalent g','Tare g','Density','Volume mL','Outlab batch','Factor VIII %','IU/bag','IU/mL','Test date','QC','Status','Created by','Weight by','Segment/Outlab by','Factor result by','Notes'];
+    const v=r=>[r.product_no,r.product_type,r.blood_group,r.manufactured_on,r.expiry_on,r.centrifuge_no,r.prep_time,qcVolumeUnit(r.volume_input_unit),qcVolumeOriginal(r,'volume_input_unit','volume_input_value','gross_weight_g','volume_ml').value,r.gross_weight_g,r.bag_tare_weight_g,r.density,r.volume_ml,plasmaBatchById(r.outlab_batch_id)?.batch_no||'',r.factor_viii_percent,r.factor_viii_iu_bag,r.factor_viii_iu_ml,r.factor_tested_on,r.qc_status,r.status,profileName(r.created_by),profileName(r.weight_recorded_by),profileName(r.segment_prepared_by),profileName(r.factor_recorded_by),r.notes];
+    const q=x=>`"${String(x??'').replaceAll('"','""')}"`;const csv='\ufeff'+[h,...rows.map(v)].map(a=>a.map(q).join(',')).join('\r\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`ffp_qc_${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(a.href);logActivity('export_csv','report',null,{module:'plasma',rows:rows.length}).catch(()=>{});
+  }
+  function plasmaDateInput(v){ return v?String(v).slice(0,10):''; }
+  function plasmaTimeInput(v){ return v?String(v).slice(0,5):''; }
+  function plasmaField(label,id,value,type='text',readonly=false,required=false,step=''){return `<div class="field"><label class="${required?'required':''}">${label}</label><input id="${id}" type="${type}" value="${esc(value??'')}" ${readonly?'readonly':''} ${step?`step="${step}"`:''}></div>`;}
+  function plasmaCalcPreview(){
+    const cfg=plasmaProductSetting($('#plasma_product_type')?.value||''); const tare=cfg?Number(cfg.tare_weight_g):null,density=cfg?Number(cfg.density):null,entry=qcVolumeInput($('#plasma_volume_unit'),$('#plasma_gross_weight_g'),tare,density),volume=entry.volume; const pct=num($('#plasma_factor_viii_percent')?.value); const iuMl=pct==null?null:pct/100; const iuBag=pct!=null&&volume!=null?pct*volume/100:null; return {tare,density,volume,pct,iuMl,iuBag};
+  }
+  function updatePlasmaPreview(){
+    syncQcVolumeFormFields();
+    const c=plasmaCalcPreview();if($('#plasma_tare'))$('#plasma_tare').value=c.tare==null?'':c.tare.toFixed(2);if($('#plasma_density'))$('#plasma_density').value=c.density==null?'':c.density.toFixed(3);if($('#plasma_volume'))$('#plasma_volume').value=c.volume==null?'':c.volume.toFixed(2);if($('#plasma_iu_ml'))$('#plasma_iu_ml').textContent=fmt(c.iuMl,3);if($('#plasma_iu_bag'))$('#plasma_iu_bag').textContent=fmt(c.iuBag,2);
+    const m=$('#plasma_manufactured_on')?.value;if(m&&$('#plasma_expiry_on')){const d=new Date(`${m}T12:00:00+07:00`);d.setDate(d.getDate()+Number(state.plasmaSettings.expiry_days||365));$('#plasma_expiry_on').value=inputFromISO(d.toISOString()).slice(0,10);}
+    if($('#plasma_qc_preview')){let text='ข้อมูลยังไม่ครบ',cls='incomplete';if(c.volume!=null&&c.iuMl!=null){if(c.volume>=Number(state.plasmaSettings.volume_min_ml)&&c.iuMl>=Number(state.plasmaSettings.factor_viii_min_iu_ml)){text='ผ่านเกณฑ์ QC';cls='pass';}else{text='ต้องตรวจสอบ';cls='review';}}$('#plasma_qc_preview').innerHTML=`<span class="badge ${cls}">${text}</span>`;}
+  }
+  async function renderPlasmaRecordForm(){
+    if(!state.currentPlasmaRecordId&&!staffWriteUi()){location.hash=ROUTES.review;return;}
+    let r=null;state.currentPlasmaEvidence=[];
+    if(state.currentPlasmaRecordId){const {data,error}=await state.sb.from('plasma_records').select('*').eq('id',state.currentPlasmaRecordId).single();if(error){showToast(errText(error),'error');return;}r=qcNormalizeRow(data);const {data:ev}=await state.sb.from('plasma_evidence_files').select('*').eq('record_id',r.id).order('created_at');state.currentPlasmaEvidence=ev||[];}
+    const locked=r?.status==='locked',submitted=r?.status==='submitted',deleted=!!r?.deleted_at;const editable=!deleted&&(adminUi()||(!locked&&!submitted&&staffWriteUi()));const batch=r?.outlab_batch_id?plasmaBatchById(r.outlab_batch_id):null;
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>${r?'FFP · '+esc(r.product_no):'บันทึก FFP'}</h1><p class="muted">Plasma · Factor VIII QC</p></div><div class="page-head-tools"><button type="button" class="btn small-btn" data-go-route="#/plasma/guide">คู่มือ FFP</button>${r?`<div class="status-line">${plasmaQcBadge(r.qc_status)} ${statusBadge(r.status)}</div>`:''}</div></div>
+      ${deleted?`<div class="notice bad"><strong>รายการนี้ถูกลบแล้ว</strong><br>${esc(r.delete_reason||'–')}</div>`:''}${locked&&!adminUi()?'<div class="notice good"><strong>LOCK แล้ว</strong> หากพบข้อมูลผิดให้แจ้ง Admin พร้อมหลักฐาน</div>':''}${r?.status==='draft'&&r?.returned_at&&r?.review_note?`<div class="notice warning"><strong>แพทย์ส่งกลับแก้ไข</strong><br>${esc(r.review_note)}</div>`:''}
+      <form id="plasmaRecordForm">
+      ${r&&adminUi()&&!deleted?`<div class="panel admin-correction-panel"><h2>การแก้ไขโดย Admin</h2><div class="field"><label>เหตุผลการแก้ไข</label><textarea id="plasma_admin_reason" placeholder="เช่น เจ้าหน้าที่แจ้งผลผิด ตรวจหลักฐานใหม่แล้วแก้ไข"></textarea></div></div>`:''}
+      <div class="panel"><h2>1. ข้อมูล FFP</h2><div id="plasmaPlannerOwnerHint" class="planner-owner-hint"><span>ผู้รับผิดชอบตาม Staff Planner</span><strong>เลือกชนิด FFP และวันที่ผลิตก่อน</strong><small>ตำแหน่ง BB-Manual 3</small></div><div class="form-grid">${plasmaField('Product No.','plasma_product_no',r?.product_no,'text',false,true)}<div class="field"><label class="required">ชนิด FFP</label><select id="plasma_product_type"><option value="">เลือก</option>${plasmaProductOptions(r?.product_type)}</select></div><div class="field"><label>Group</label><select id="plasma_group"><option value="">เลือก</option>${['O','A','B','AB'].map(g=>`<option ${r?.blood_group===g?'selected':''}>${g}</option>`).join('')}</select></div>${plasmaField('วันที่ผลิต','plasma_manufactured_on',plasmaDateInput(r?.manufactured_on),'date')}${plasmaField('วันหมดอายุ','plasma_expiry_on',plasmaDateInput(r?.expiry_on),'date',true)}<div class="field"><label>เครื่องปั่น</label><select id="plasma_centrifuge"><option value="">เลือก</option><option value="1" ${r?.centrifuge_no==='1'?'selected':''}>1</option><option value="2" ${r?.centrifuge_no==='2'?'selected':''}>2</option></select></div>${plasmaField('เวลา','plasma_prep_time',plasmaTimeInput(r?.prep_time),'time')}</div></div>
+      <div class="panel"><div class="section-title-row"><h2>2. น้ำหนักและ Volume</h2>${r?.weight_recorded_by?`<span class="section-badge">ผู้กรอก ${esc(profileName(r.weight_recorded_by))} · ${esc(dateTH(r.weight_recorded_at))}</span>`:''}</div><div class="form-grid">${qcVolumeChoice('plasma_volume_unit','plasma_volume_input_label','plasma_gross_weight_g',r,'volume_input_unit','volume_input_value','gross_weight_g','volume_ml',editable)}${plasmaField('น้ำหนักถุงเปล่า (g)','plasma_tare',r?.bag_tare_weight_g,'number',true)}${plasmaField('Density','plasma_density',r?.density,'number',true)}${plasmaField('Volume (mL)','plasma_volume',r?.volume_ml,'number',true)}</div></div>
+      <div class="panel"><div class="section-title-row"><h2>3. นำส่ง Factor VIII</h2>${r?.segment_prepared_by?`<span class="section-badge">ผู้เตรียม/นำส่ง ${esc(profileName(r.segment_prepared_by))} · ${esc(dateTH(r.segment_prepared_at))}</span>`:''}</div>${batch?`<div class="detail-grid">${dcell('ชุดนำส่ง',batch.batch_no)}${dcell('วันที่-เวลานำส่ง',dateTH(batch.sent_at))}${dcell('ผู้เตรียมสิ่งส่งตรวจ',profileName(batch.prepared_by))}${dcell('เจ้าหน้าที่ RFS',batch.rfs_staff_name||'–')}</div><div class="actions left-actions" style="margin-top:12px"><button type="button" class="btn" id="plasmaPrintBatch">Export PDF ใบนำส่ง</button></div>`:`<div class="notice info small">ยังไม่ได้จัดเข้าชุดนำส่ง Factor VIII${r?'':' · บันทึกรายการก่อน'}</div>${r&&editable?'<button type="button" class="btn" id="plasmaOpenBatch">สร้าง/จัดชุดใบนำส่ง</button>':''}`}</div>
+      <div class="panel measurement-entry-panel"><div class="section-title-row"><h2>4. ผล Factor VIII</h2>${r?.factor_recorded_by?`<span class="section-badge">ผู้กรอกผล ${esc(profileName(r.factor_recorded_by))} · ${esc(dateTH(r.factor_recorded_at))}</span>`:''}</div><div class="form-grid">${plasmaField('Factor VIII (%)','plasma_factor_viii_percent',r?.factor_viii_percent,'number',false,false,'0.1')}${plasmaField('วันที่ทดสอบ','plasma_factor_tested_on',plasmaDateInput(r?.factor_tested_on),'date')}<div class="calc-box"><span>Factor VIII</span><strong id="plasma_iu_ml">${fmt(r?.factor_viii_iu_ml,3)}</strong><small>IU/mL</small></div><div class="calc-box"><span>Factor VIII</span><strong id="plasma_iu_bag">${fmt(r?.factor_viii_iu_bag,2)}</strong><small>IU/bag</small></div></div><div id="plasma_qc_preview" style="margin-top:10px"></div>${plasmaEvidenceBox(r,editable,locked)}</div>
+      <div class="panel"><h2>5. หมายเหตุ</h2><textarea id="plasma_notes" placeholder="บันทึกข้อมูลเพิ่มเติม">${esc(r?.notes||'')}</textarea></div>
+      <div class="sticky-actions"><div class="left"><button type="button" class="btn" id="plasmaBack">กลับรายการทั้งหมด</button></div><div class="right ${!r?'new-record-actions':''}">${!r&&editable?'<button type="button" class="btn clear-form-btn" id="plasmaClear">ล้างฟอร์ม</button>':''}${editable?'<button type="button" class="btn primary" id="plasmaSave">บันทึกข้อมูล</button>':''}${r&&r.status==='draft'&&editable?'<div class="review-submit-group"><small>ขั้นตอนสุดท้าย · ส่งเมื่อข้อมูลครบแล้ว</small><button type="button" class="btn review-submit-btn" id="plasmaSubmit">ส่งให้แพทย์ทบทวน</button></div>':''}${r&&r.status==='locked'&&adminUi()&&!deleted?'<button type="button" class="btn danger" id="plasmaUnlock">ปลดล็อกเป็น Draft</button>':''}</div></div></form>`;
+    if(!editable)$$('#plasmaRecordForm input,#plasmaRecordForm select,#plasmaRecordForm textarea').forEach(el=>{if(!el.readOnly)el.disabled=true;});
+    updatePlasmaPreview();renderPlasmaEvidence(editable,locked);bindRouteButtons($('#view-module'));
+    const refreshPlasmaOwner=()=>refreshPlannerOwnerHint('plasmaPlannerOwnerHint',$('#plasma_manufactured_on')?.value,'plasma',$('#plasma_product_type')?.value||'');
+    $('#plasma_volume_unit')?.addEventListener('change',()=>{const cfg=plasmaProductSetting($('#plasma_product_type')?.value||'');qcVolumeSwitch('plasma_volume_unit','plasma_gross_weight_g','plasma_volume_input_label','previousUnit',cfg?num(cfg.tare_weight_g):null,cfg?num(cfg.density):null,updatePlasmaPreview);});
+    ['plasma_product_type','plasma_gross_weight_g','plasma_factor_viii_percent','plasma_manufactured_on'].forEach(id=>$('#'+id)?.addEventListener('input',updatePlasmaPreview));
+    $('#plasma_product_type')?.addEventListener('change',refreshPlasmaOwner);$('#plasma_manufactured_on')?.addEventListener('change',refreshPlasmaOwner);refreshPlasmaOwner();
+    $('#plasmaBack').onclick=()=>location.hash=ROUTES.plasma.records;if($('#plasmaClear'))$('#plasmaClear').onclick=async()=>{if(await qcConfirmCentered('ล้างฟอร์มทั้งหมด?',{title:'ล้างฟอร์ม FFP',acceptText:'ล้างข้อมูล'}))renderPlasmaRecordForm();};if($('#plasmaSave'))$('#plasmaSave').onclick=()=>savePlasmaRecord(false);if($('#plasmaSubmit'))$('#plasmaSubmit').onclick=submitPlasmaRecord;if($('#plasmaUnlock'))$('#plasmaUnlock').onclick=unlockPlasmaRecord;if($('#plasmaOpenBatch'))$('#plasmaOpenBatch').onclick=openPlasmaBatchBuilder;if($('#plasmaPrintBatch'))$('#plasmaPrintBatch').onclick=()=>printPlasmaOutlabBatch(batch.id);if(!r)backlogApplyNewContext('plasma',$('#view-module'));
+  }
+  function collectPlasmaRecord(){
+    const adminReason=$('#plasma_admin_reason')?.value.trim()||null;return {product_no:$('#plasma_product_no').value.trim(),product_type:$('#plasma_product_type').value,blood_group:$('#plasma_group').value||null,manufactured_on:$('#plasma_manufactured_on').value||null,centrifuge_no:$('#plasma_centrifuge').value||null,prep_time:$('#plasma_prep_time').value||null,gross_weight_g:(()=>{const c=plasmaProductSetting($('#plasma_product_type')?.value||'');return qcVolumeInput($('#plasma_volume_unit'),$('#plasma_gross_weight_g'),c?num(c.tare_weight_g):null,c?num(c.density):null).gross;})(),volume_input_unit:qcVolumeUnit($('#plasma_volume_unit')?.value),volume_input_value:num($('#plasma_gross_weight_g')?.value),factor_viii_percent:num($('#plasma_factor_viii_percent').value),factor_tested_on:$('#plasma_factor_tested_on').value||null,notes:$('#plasma_notes').value.trim()||null,...(adminUi()&&state.currentPlasmaRecordId&&adminReason?{last_admin_edit_reason:adminReason,last_admin_edit_id:crypto.randomUUID()}:{} )};
+  }
+  function plasmaHasFactorEvidence(){return state.currentPlasmaEvidence.some(e=>e.category==='factor_viii');}
+  async function savePlasmaRecord(silent=false,autoEvidence=false){
+    if(!qcDateGuard())return false;
+    try{let payload=collectPlasmaRecord();if(payload.volume_input_value!==null&&payload.gross_weight_g===null){showToast('ยังคำนวณ Volume ไม่ได้ กรุณาตรวจสอบชนิด FFP และค่า g/mL','error');return false;}if(!payload.product_no||!payload.product_type){showToast('กรุณากรอก Product No. และชนิด FFP','error');return false;}let id=state.currentPlasmaRecordId;if(autoEvidence&&!id){payload={...payload,factor_viii_percent:null,factor_tested_on:null};}if(!autoEvidence&&payload.factor_viii_percent!==null&&!plasmaHasFactorEvidence()){showToast('ผล Factor VIII ต้องแนบรูปหรือ PDF หลักฐานก่อนบันทึก','error');return false;}if(id&&adminUi()&&!payload.last_admin_edit_reason){showToast('Admin กรุณาระบุเหตุผลการแก้ไข','error');$('#plasma_admin_reason')?.focus();return false;}if(id){const {error}=await state.sb.from('plasma_records').update(payload).eq('id',id);if(error)throw error;}else{const {data,error}=await state.sb.from('plasma_records').insert({...payload,created_by:state.user.id}).select('id').single();if(error)throw error;id=data.id;state.currentPlasmaRecordId=id;}await reloadPlasmaRecords();if(!silent)showToast('บันทึก FFP แล้ว','good');if(!silent&&!autoEvidence)await renderPlasmaRecordForm();return true;}catch(e){showToast(errText(e),'error');return false;}
+  }
+  function plasmaEvidenceBox(r,editable,locked){
+    return `<div class="measurement-evidence"><div class="measurement-evidence-head"><div><strong>หลักฐานผล Factor VIII</strong><small class="evidence-multi-hint">เลือกหลายรูปหรือหลายไฟล์พร้อมกันได้</small></div><span class="section-badge required-evidence">บังคับ</span></div><input class="hidden-file-input" type="file" id="plasma_camera" accept="image/*" capture="environment"><input class="hidden-file-input" type="file" id="plasma_file" accept="image/*,application/pdf" multiple><div class="evidence-pick-actions">${editable?'<button type="button" class="btn primary small-btn" id="plasmaCameraBtn">ถ่ายรูป</button><button type="button" class="btn small-btn" id="plasmaFileBtn">เลือกรูป / ไฟล์ <span class="multi-file-label">หลายไฟล์ได้</span></button>':''}</div><div class="evidence-list" id="plasmaEvidenceList"></div></div>`;
+  }
+  function renderPlasmaEvidence(editable,locked=false){
+    const host=$('#plasmaEvidenceList');if(!host)return;const arr=state.currentPlasmaEvidence||[];const canDelete=editable&&!locked;host.innerHTML=arr.length?arr.map(e=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(e.original_name)}</strong><small>ผู้แนบหลักฐาน ${esc(profileName(e.uploaded_by))} · ${esc(dateTH(e.created_at))}</small>${e.change_reason?`<small>Admin: ${esc(e.change_reason)}</small>`:''}</span><span class="e-actions"><button type="button" class="btn small-btn plasma-ev-view" data-id="${e.id}">ดู</button>${canDelete?`<button type="button" class="btn small-btn danger plasma-ev-del" data-id="${e.id}">ลบ</button>`:''}</span></div>`).join(''):'<div class="muted small">ยังไม่มีหลักฐาน</div>';
+    $$('.plasma-ev-view').forEach(b=>b.onclick=()=>viewPlasmaEvidence(b.dataset.id));$$('.plasma-ev-del').forEach(b=>b.onclick=()=>deletePlasmaEvidence(b.dataset.id));if($('#plasmaCameraBtn'))$('#plasmaCameraBtn').onclick=()=>$('#plasma_camera').click();if($('#plasmaFileBtn'))$('#plasmaFileBtn').onclick=()=>$('#plasma_file').click();if($('#plasma_camera'))$('#plasma_camera').onchange=()=>uploadPlasmaEvidence('plasma_camera');if($('#plasma_file'))$('#plasma_file').onchange=()=>uploadPlasmaEvidence('plasma_file');
+  }
+  async function uploadPlasmaEvidence(inputId){
+    try{const input=$('#'+inputId),files=Array.from(input?.files||[]);if(!files.length)return;const tooBig=files.find(f=>f.size>10*1024*1024);if(tooBig)throw new Error(`${tooBig.name}: ไฟล์ต้องไม่เกิน 10 MB`);const existed=!!state.currentPlasmaRecordId;if(!state.currentPlasmaRecordId){const ok=await savePlasmaRecord(true,true);if(!ok)return;}const rid=state.currentPlasmaRecordId;let reason=null;if(adminUi()&&existed){reason=$('#plasma_admin_reason')?.value.trim()||null;if(!reason)throw new Error('Admin กรุณาระบุเหตุผลการแก้ไขก่อนแนบหลักฐานใหม่');}let uploaded=0;for(let i=0;i<files.length;i++){const file=files[i],pf=await optimizeEvidenceFile(file),clean=pf.uploadName,path=`plasma/${rid}/factor_viii/${Date.now()}_${i}_${clean}`;const {error:u}=await state.sb.storage.from('bloodqc-evidence').upload(path,pf.body,{upsert:false,contentType:pf.mime||undefined});if(u)throw u;const {data,error}=await state.sb.from('plasma_evidence_files').insert({record_id:rid,category:'factor_viii',storage_path:path,original_name:file.name,mime_type:pf.mime,file_size:pf.body.size,uploaded_by:state.user.id,change_reason:reason}).select('*').single();if(error){await state.sb.storage.from('bloodqc-evidence').remove([path]);throw error;}state.currentPlasmaEvidence.push(data);uploaded++;}input.value='';renderPlasmaEvidence(true,false);showToast(uploaded>1?`แนบหลักฐาน Factor VIII แล้ว ${uploaded} ไฟล์`:'แนบหลักฐาน Factor VIII แล้ว','good');}catch(e){showToast(errText(e),'error');}
+  }
+
+  async function viewPlasmaEvidence(id){const e=state.currentPlasmaEvidence.find(x=>x.id===id);if(!e)return;const {data,error}=await state.sb.storage.from('bloodqc-evidence').createSignedUrl(e.storage_path,120);if(error)showToast(errText(error),'error');else window.open(data.signedUrl,'_blank','noopener');}
+  async function deletePlasmaEvidence(id){const e=state.currentPlasmaEvidence.find(x=>x.id===id);if(!e)return;if(!await qcConfirmCentered(`ลบหลักฐาน ${e.original_name} ?`,{title:'ลบหลักฐาน',acceptText:'ลบ',acceptClass:'danger'}))return;try{const {error}=await state.sb.from('plasma_evidence_files').delete().eq('id',id);if(error)throw error;const {error:s}=await state.sb.storage.from('bloodqc-evidence').remove([e.storage_path]);if(s)console.warn('storage cleanup failed',s);state.currentPlasmaEvidence=state.currentPlasmaEvidence.filter(x=>x.id!==id);renderPlasmaEvidence(true,false);showToast('ลบหลักฐานแล้ว');}catch(e2){showToast(errText(e2),'error');}}
+  async function submitPlasmaRecord(){if(!await qcConfirmCentered('ยืนยันส่งให้แพทย์ทบทวน?\n\nหลังส่ง เจ้าหน้าที่จะกลับมาแก้ไขเองไม่ได้จนกว่าแพทย์จะส่งกลับแก้ไข',{title:'ส่งให้แพทย์ทบทวน FFP',acceptText:'ยืนยันส่ง'}))return;if(!await savePlasmaRecord(true))return;try{const {error}=await state.sb.from('plasma_records').update({status:'submitted'}).eq('id',state.currentPlasmaRecordId);if(error)throw error;await reloadPlasmaRecords();showToast('ส่งให้แพทย์ทบทวนแล้ว','good');await renderPlasmaRecordForm();}catch(e){showToast(errText(e),'error');}}
+  async function unlockPlasmaRecord(){const reason=await qcPromptCentered('ระบุเหตุผลที่ต้องปลดล็อก', {title:'ปลดล็อกรายการ FFP',placeholder:'เหตุผลที่ต้องปลดล็อก',required:true,multiline:true,acceptText:'ปลดล็อก'});if(!reason?.trim())return;try{const {error}=await state.sb.from('plasma_records').update({status:'draft',last_unlock_reason:reason.trim()}).eq('id',state.currentPlasmaRecordId);if(error)throw error;await reloadPlasmaRecords();showToast('ปลดล็อกแล้ว','good');await renderPlasmaRecordForm();}catch(e){showToast(errText(e),'error');}}
+
+async function openPlasmaBatchBuilder(preselectId=null,editBatchId=null){
+  if(!staffWriteUi())return;
+  const editing=!!editBatchId,batch=editing?plasmaBatchById(editBatchId):null;
+  if(editing&&(!batch||!canEditPlasmaBatch(batch))){showToast('ชุดนำส่งนี้แก้ไขไม่ได้แล้ว เพราะมีผล Factor VIII / ส่งตรวจทวน / LOCK หรือไม่ใช่ชุดที่คุณเตรียม','error');return;}
+  const currentIds=new Set(editing?plasmaBatchRecords(editBatchId).map(r=>r.id):[]);
+  const candidates=state.plasmaRecords.filter(r=>!r.deleted_at&&r.status==='draft'&&r.factor_viii_percent==null&&(!r.outlab_batch_id||r.outlab_batch_id===editBatchId));
+  if(!candidates.length){showToast(editing?'ไม่พบรายการที่แก้ไขได้ในชุดนี้':'ไม่มี FFP ที่รอจัดชุดนำส่ง','error');return;}
+  const now=new Date(),today=inputFromISO(now.toISOString()).slice(0,10),defaultTime=String(state.plasmaSettings.default_send_time||'10:00').slice(0,5);
+  const sentValue=editing?inputFromISO(batch.sent_at).slice(0,16):`${today}T${defaultTime}`;
+  const ordered=[...candidates].sort((a,b)=>String(a.product_type).localeCompare(String(b.product_type),'th')||String(a.product_no).localeCompare(String(b.product_no)));
+  ensureDetailDialogShell();
+  $('#detailTitle').textContent=editing?'แก้ไขชุดนำส่ง Factor VIII':'สร้างใบนำส่ง Factor VIII ใหม่';
+  $('#detailSubtitle').textContent=editing?`${batch.batch_no} · แก้ Product No. แล้ว Export PDF ใหม่ได้`:'1 เที่ยวส่ง = 1 ใบนำส่ง · เลือกได้ตั้งแต่ 1 ถุงขึ้นไป';
+  $('#detailBody').innerHTML=`<div class="form-grid"><div class="field span2"><label>วัน-เวลานำส่ง</label><input id="batch_sent_at" type="datetime-local" value="${esc(sentValue)}"></div><div class="field span2"><label>เจ้าหน้าที่ RFS ที่นำส่ง</label><input id="batch_rfs" placeholder="ถ้ามี" value="${esc(editing?(batch.rfs_staff_name||''):'')}"></div></div>
+    <div class="outlab-batch-toolbar"><label class="inline-check"><input type="checkbox" id="batchPickAll"> เลือกทั้งหมด</label><div id="batchTypeSummary" class="muted small">ยังไม่ได้เลือกรายการ</div></div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th></th><th>Product No.</th><th>ชนิด FFP</th><th>Group</th><th>Volume</th></tr></thead><tbody>${ordered.map(r=>`<tr><td><input type="checkbox" class="batch-pick" value="${r.id}" data-product-type="${esc(r.product_type)}" ${(currentIds.has(r.id)||(!editing&&preselectId===r.id))?'checked':''}></td><td><strong>${esc(r.product_no)}</strong></td><td>${esc(r.product_type)}</td><td>${esc(r.blood_group||'–')}</td><td>${r.volume_ml==null?'รอกรอก':fmt(r.volume_ml,2)+' mL'}</td></tr>`).join('')}</tbody></table></div>
+    <div class="field" style="margin-top:14px"><label>หมายเหตุ</label><textarea id="batch_notes">${esc(editing?(batch.notes||''):'')}</textarea></div>
+    ${editing?'<div class="notice warning small"><strong>กรณีเลือก Product No. ผิด:</strong> แก้รายการในชุดนี้แล้วกดบันทึก ระบบจะเก็บ Audit Log และให้ Export PDF ฉบับใหม่โดยใช้เลขชุดเดิม กรุณาไม่นำ PDF ฉบับเก่าไปใช้</div>':'<div class="notice info small"><strong>ส่งเพิ่มวันอื่น:</strong> สร้างใบนำส่งใหม่อีกชุด แล้วเลือกเฉพาะถุงที่ส่งครั้งนั้นได้ 1–2 ถุงหรือมากกว่านั้น</div>'}
+    <div class="actions"><button class="btn" id="batchCancel">ยกเลิก</button><button class="btn primary" id="batchCreate">${editing?'บันทึกการแก้ไข + Export PDF ใหม่':'สร้างชุด + Export PDF'}</button></div>`;
+  const updateSummary=()=>{
+    const picked=$$('.batch-pick:checked');
+    const counts={};picked.forEach(x=>{const t=x.dataset.productType||'อื่น';counts[t]=(counts[t]||0)+1;});
+    $('#batchTypeSummary').textContent=picked.length?`${picked.length} รายการ · ${Object.entries(counts).map(([k,v])=>`${k} ${v}`).join(' · ')}`:'ยังไม่ได้เลือกรายการ';
+    $('#batchPickAll').checked=picked.length===ordered.length;
+    $('#batchPickAll').indeterminate=picked.length>0&&picked.length<ordered.length;
+  };
+  $$('.batch-pick').forEach(x=>x.onchange=updateSummary);
+  $('#batchPickAll').onchange=e=>{$$('.batch-pick').forEach(x=>x.checked=e.target.checked);updateSummary();};
+  $('#batchCancel').onclick=()=>$('#detailDialog').close();
+  $('#batchCreate').onclick=()=>editing?updatePlasmaBatch(editBatchId,true):createPlasmaBatch(true);
+  updateSummary();
+  $('#detailDialog').showModal();
+}
+async function createPlasmaBatch(exportAfter=true){
+  try{const ids=$$('.batch-pick:checked').map(x=>x.value);if(!ids.length)throw new Error('เลือกอย่างน้อย 1 รายการ');const sent=$('#batch_sent_at').value;if(!sent)throw new Error('กรุณาระบุวัน-เวลานำส่ง');const stamp=sent.replace(/[-T:]/g,'').slice(0,12),batchNo=`FFP-${stamp}-${Math.random().toString(36).slice(2,5).toUpperCase()}`;const payload={batch_no:batchNo,sent_at:bangkokISO(sent),prepared_by:state.user.id,rfs_staff_name:$('#batch_rfs').value.trim()||null,service_code:state.plasmaSettings.outlab_service_code,test_name:state.plasmaSettings.outlab_test_name,form_code:state.plasmaSettings.outlab_form_code,form_effective_text:state.plasmaSettings.outlab_form_effective_text||'วันบังคับใช้ 15 มกราคม 2565',result_email:state.plasmaSettings.result_email||'transfusionbb_cnmi@mahidol.ac.th',destination:state.plasmaSettings.outlab_destination,notes:$('#batch_notes').value.trim()||null,created_by:state.user.id};const {data:b,error}=await state.sb.from('plasma_outlab_batches').insert(payload).select('*').single();if(error)throw error;const {error:u}=await state.sb.from('plasma_records').update({outlab_batch_id:b.id}).in('id',ids);if(u)throw u;await Promise.all([reloadPlasmaRecords(),reloadPlasmaBatches()]);state.plasmaBatchPage=1;$('#detailDialog').close();showToast('สร้างชุดนำส่งแล้ว','good');if(exportAfter)printPlasmaOutlabBatch(b.id);if(state.currentModule==='plasma')renderPlasmaPage(state.currentPage||'dashboard');}catch(e){showToast(errText(e),'error');}
+}
+async function updatePlasmaBatch(batchId,exportAfter=true){
+  try{
+    const ids=$$('.batch-pick:checked').map(x=>x.value);if(!ids.length)throw new Error('ชุดนำส่งต้องมีอย่างน้อย 1 รายการ');
+    const sent=$('#batch_sent_at').value;if(!sent)throw new Error('กรุณาระบุวัน-เวลานำส่ง');
+    const {error}=await state.sb.rpc('update_plasma_outlab_batch',{p_batch_id:batchId,p_record_ids:ids,p_sent_at:bangkokISO(sent),p_rfs_staff_name:$('#batch_rfs').value.trim()||null,p_notes:$('#batch_notes').value.trim()||null});
+    if(error)throw error;
+    await Promise.all([reloadPlasmaRecords(),reloadPlasmaBatches()]);state.plasmaBatchPage=1;$('#detailDialog').close();showToast('แก้ไขชุดนำส่งแล้ว · กรุณาใช้ PDF ฉบับใหม่','good');if(exportAfter)printPlasmaOutlabBatch(batchId);if(state.currentModule==='plasma')renderPlasmaPage(state.currentPage||'dashboard');
+  }catch(e){showToast(errText(e),'error');}
+}
+
+function printPlasmaOutlabBatch(batchId){
+  const b=plasmaBatchById(batchId);
+  if(!b){showToast('ไม่พบชุดนำส่ง','error');return;}
+  if(b.deleted_at){showToast('ชุดนำส่งนี้ถูกยกเลิกแล้ว จึงไม่สามารถออก PDF ใหม่ได้','error');return;}
+  const rows=state.plasmaRecords.filter(r=>r.outlab_batch_id===batchId&&!r.deleted_at).sort((a,b)=>String(a.product_type).localeCompare(String(b.product_type),'th')||String(a.product_no).localeCompare(String(b.product_no)));
+  if(!rows.length){showToast('ไม่มีรายการในชุดนำส่ง','error');return;}
+  if(document.fonts&&!(document.fonts.check('16px "TH Sarabun New"')||document.fonts.check('16px "TH SarabunNew"'))){showToast('เครื่องนี้ไม่พบ TH Sarabun New - PDF อาจใช้ฟอนต์สำรอง','warn');}
+  const w=window.open('','_blank');
+  if(!w){showToast('Browser บล็อกหน้าต่าง PDF กรุณาอนุญาต Pop-up','error');return;}
+  const sentDate=dateTHLong(b.sent_at);
+  const sentTime=new Intl.DateTimeFormat('th-TH',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(b.sent_at)).replace(':','.');
+  const resultEmail=b.result_email||state.plasmaSettings.result_email||'transfusionbb_cnmi@mahidol.ac.th';
+  const effectiveText=b.form_effective_text||state.plasmaSettings.outlab_form_effective_text||'วันบังคับใช้ 15 มกราคม 2565';
+  const logoUrl=new URL('assets/ramathibodi-mark.png',location.href.split('#')[0]).href;
+  const maxRowsPerPage=12;
+  const pages=[];
+  for(let i=0;i<rows.length;i+=maxRowsPerPage)pages.push(rows.slice(i,i+maxRowsPerPage));
+  const pageHtml=(pageRows,pageIndex)=>`<section class="page">
+    <table class="form-head-table"><tr><td class="form-logo" rowspan="3"><img src="${logoUrl}" alt="ตรามหาวิทยาลัยมหิดล"></td><td class="head-row"><span class="label">ชื่อแบบฟอร์ม :</span> บันทึกส่งสิ่งส่งตรวจต่อโรงพยาบาลรามาธิบดี ผ่าน ศูนย์บริการพยาธิวิทยา</td></tr><tr><td class="head-row"><span class="label">ฝ่าย/งาน/หน่วย :</span> หน่วยเวชศาสตร์บริการโลหิต</td></tr><tr><td class="head-row hospital">โรงพยาบาลรามาธิบดีจักรีนฤบดินทร์ คณะแพทยศาสตร์โรงพยาบาลรามาธิบดี มหาวิทยาลัยมหิดล</td></tr></table>
+    <table class="sample-table"><thead><tr><th>ตัวอย่างส่งตรวจ</th><th>รหัสบริการ</th><th>ชื่อการทดสอบ</th></tr></thead><tbody>${pageRows.map(r=>`<tr><td>${esc(r.product_no)}</td><td>${esc(b.service_code)}</td><td>${esc(b.test_name)}</td></tr>`).join('')}</tbody></table>
+    <div class="send-block">
+      <div class="destination"><span>สำหรับ</span><strong>${esc(b.destination)}</strong></div>
+      <div class="send-grid">
+        <div class="send-line"><span class="send-label">ผู้เตรียมสิ่งส่งตรวจ</span><span class="value">${esc(profileName(b.prepared_by))}</span></div>
+        <div class="send-line"><span class="send-label">เจ้าหน้าที่ RFS ที่นำส่ง</span><span class="value">${esc(b.rfs_staff_name||'')}</span></div>
+        <div class="send-line"><span class="send-label">วันที่นำส่ง</span><span class="value">${esc(sentDate)}</span></div>
+        <div class="send-line"><span class="send-label">เวลาที่นำส่ง</span><span class="value">${esc(sentTime)} น.</span></div>
+      </div>
+      <div class="note"><b>* หมายเหตุ:</b> ส่งผลกลับไปที่ E-mail: <b>${esc(resultEmail)}</b></div>
+    </div>
+    <div class="page-footer"><span>หน้า ${pageIndex+1} ของ ${pages.length} หน้า</span><span>${esc(b.form_code)}&nbsp;&nbsp;${esc(effectiveText)}</span></div>
+  </section>`;
+  w.document.write(`<!doctype html><html lang="th"><head><meta charset="utf-8"><title>${esc(b.batch_no)}</title><style>
+    @page{size:A4;margin:9mm 10mm 8mm}
+    *{box-sizing:border-box}html,body{margin:0;padding:0;color:#111;background:#fff}
+    body{font-family:"TH Sarabun New","TH SarabunNew","Sarabun",Tahoma,sans-serif;font-size:16pt;line-height:1.08}
+    .page{min-height:279mm;position:relative;display:flex;flex-direction:column;page-break-after:always}.page:last-child{page-break-after:auto}
+    .form-head-table{width:100%;border-collapse:collapse;table-layout:fixed}
+    .form-head-table td{border:1.1px solid #111}
+    .form-logo{width:23mm;height:22mm;text-align:center;vertical-align:middle;padding:.7mm}
+    .form-logo img{width:20mm;height:20mm;object-fit:contain;display:block;margin:auto}
+    .head-row{height:7.3mm;padding:.45mm 2.2mm;font-size:14.6pt;line-height:1;vertical-align:middle;white-space:nowrap}
+    .head-row.hospital{font-size:13.8pt}.label{font-weight:700;margin-right:1mm}
+    .sample-table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:2.6mm}
+    .sample-table th,.sample-table td{border:1.1px solid #111;padding:1mm 2.5mm;height:7.6mm;vertical-align:middle}
+    .sample-table th{font-weight:700;text-align:center;background:#fafafa}
+    .sample-table td:nth-child(1),.sample-table td:nth-child(2){text-align:center}
+    .sample-table th:nth-child(1){width:38mm}.sample-table th:nth-child(2){width:28mm}
+    .send-block{margin-top:8mm;padding:0 4mm}
+    .destination{display:flex;align-items:flex-end;justify-content:center;gap:5mm;margin-bottom:6mm;font-size:20pt}
+    .destination span{font-weight:700}.destination strong{min-width:105mm;text-align:center;border-bottom:1.2px dotted #111;padding:0 5mm 1mm;font-weight:700}
+    .send-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:14mm;row-gap:5mm}
+    .send-line{display:grid;grid-template-columns:auto 1fr;align-items:end;gap:3mm;min-width:0}
+    .send-label{white-space:nowrap}.send-line .value{border-bottom:1.1px dotted #111;min-height:6mm;padding:0 2mm .8mm;text-align:center;overflow:hidden}
+    .note{margin-top:7mm;padding:2.5mm 3.5mm;border:1px solid #bbb;border-radius:2px;font-size:14.5pt}
+    .page-footer{margin-top:auto;display:flex;justify-content:space-between;gap:8mm;padding-top:6mm;font-size:10.5pt;color:#333}
+    .print-help{position:fixed;right:12px;top:12px;z-index:20;padding:8px 14px;border:1px solid #bbb;border-radius:8px;background:#fff;font:14px sans-serif;box-shadow:0 2px 8px #0002}
+    @media print{.print-help{display:none}.sample-table th{background:#fff}}
+  </style></head><body><button class="print-help" onclick="window.print()">พิมพ์ / Save PDF</button>${pages.map(pageHtml).join('')}<script>window.addEventListener('load',()=>setTimeout(()=>window.print(),600));<\/script></body></html>`);
+  w.document.close();
+  logActivity('export_pdf','plasma_outlab_batch',batchId,{module:'plasma',batch_no:b.batch_no,records:rows.length,pages:pages.length}).catch(()=>{});
+}
+  async function openPlasmaDetail(id){
+    try{ensureDetailDialogShell();const {data:r,error}=await state.sb.from('plasma_records').select('*').eq('id',id).single();if(error)throw error;const [{data:ev},{data:audit}]=await Promise.all([state.sb.from('plasma_evidence_files').select('*').eq('record_id',id).order('created_at'),adminUi()?state.sb.from('audit_logs').select('*').eq('module','plasma').eq('entity_id',id).order('created_at',{ascending:false}).limit(100):Promise.resolve({data:[]})]);const b=r.outlab_batch_id?plasmaBatchById(r.outlab_batch_id):null;state.currentPlasmaEvidence=ev||[];$('#detailTitle').textContent=r.product_no;$('#detailSubtitle').textContent=`${r.product_type} · Revision ${r.revision}`;const canEdit=!r.deleted_at&&(adminUi()||(r.status==='draft'&&staffWriteUi())),canReview=!r.deleted_at&&r.status==='submitted'&&reviewerUi();const evHtml=ev?.length?ev.map(x=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(x.original_name)}</strong><small>ผู้แนบหลักฐาน ${esc(profileName(x.uploaded_by))} · ${esc(dateTH(x.created_at))}</small></span><button class="btn small-btn plasma-detail-ev" data-id="${x.id}">ดู</button></div>`).join(''):'<div class="muted small">ยังไม่มีหลักฐาน</div>';
+      const batchRows=b?state.plasmaRecords.filter(x=>x.outlab_batch_id===b.id&&!x.deleted_at).sort((a,b)=>String(a.product_no).localeCompare(String(b.product_no))):[];
+      const batchProducts=batchRows.length?batchRows.map(x=>`<span class="batch-product-chip ${x.id===r.id?'current':''}">${esc(x.product_no)} · ${esc(x.product_type)}</span>`).join(''):'';
+      const prepState=r.weight_recorded_by?'<span class="step-state done">บันทึกน้ำหนักแล้ว</span>':'<span class="step-state pending">รอน้ำหนัก</span>';
+      const outlabState=b?'<span class="step-state done">ออกใบนำส่งแล้ว</span>':'<span class="step-state pending">รอใบนำส่ง</span>';
+      const factorState=r.factor_viii_percent!=null?'<span class="step-state done">มีผลแล้ว</span>':'<span class="step-state pending">รอผล</span>';
+      const reviewState=r.status==='locked'?'<span class="step-state done">แพทย์ทบทวนแล้ว</span>':r.status==='submitted'?'<span class="step-state review">รอแพทย์</span>':'<span class="step-state pending">ยังไม่ส่งทบทวน</span>';
+      $('#detailBody').innerHTML=`<div class="status-line plasma-detail-status">${plasmaQcBadge(r.qc_status)} ${statusBadge(r.status)}</div>
+      <section class="detail-section plasma-step-section"><div class="detail-section-head"><div class="step-title"><span class="step-no">1</span><div><h3>FFP และน้ำหนัก</h3><p>ข้อมูลถุงและ Volume</p></div></div>${prepState}</div><div class="detail-section-meta plasma-meta-line"><span class="detail-meta-chip"><b>ผู้สร้าง</b> ${esc(profileName(r.created_by))} · ${esc(dateTH(r.created_at))}</span>${r.weight_recorded_by?`<span class="detail-meta-chip"><b>ผู้กรอกค่า g/mL</b> ${esc(profileName(r.weight_recorded_by))} · ${esc(dateTH(r.weight_recorded_at))}</span>`:''}</div><div class="detail-grid">${dcell('ชนิด FFP',r.product_type)}${dcell('Group',r.blood_group)}${dcell('วันที่ผลิต',r.manufactured_on)}${dcell('วันหมดอายุ',r.expiry_on)}${dcell('เครื่องปั่น',r.centrifuge_no)}${dcell('เวลา',plasmaTimeInput(r.prep_time))}${dcell('ค่าที่เจ้าหน้าที่กรอก',fmt(qcVolumeOriginal(r,'volume_input_unit','volume_input_value','gross_weight_g','volume_ml').value,2)+' '+qcVolumeUnit(r.volume_input_unit))}${dcell('น้ำหนักถุงเปล่า',fmt(r.bag_tare_weight_g,2)+' g')}${dcell('Density',fmt(r.density,3))}${dcell('Volume',r.volume_ml==null?'–':fmt(r.volume_ml,2)+' mL')}</div></section>
+      <section class="detail-section plasma-step-section"><div class="detail-section-head"><div class="step-title"><span class="step-no">2</span><div><h3>ใบนำส่ง Factor VIII</h3><p>แต่ละเที่ยวส่งเป็นคนละชุด</p></div></div>${outlabState}</div>${b?`<div class="detail-section-meta plasma-meta-line"><span class="detail-meta-chip"><b>ชุดนำส่ง</b> ${esc(b.batch_no)}</span><span class="detail-meta-chip"><b>นำส่ง</b> ${esc(dateTH(b.sent_at))}</span><span class="detail-meta-chip"><b>ผู้เตรียม</b> ${esc(profileName(b.prepared_by))}</span>${b.rfs_staff_name?`<span class="detail-meta-chip"><b>RFS</b> ${esc(b.rfs_staff_name)}</span>`:''}</div><div class="batch-products">${batchProducts}</div><div class="actions left-actions"><button class="btn" id="detailPlasmaPdf">Export PDF ใบนำส่ง</button>${canEditPlasmaBatch(b)?'<button class="btn" id="detailEditBatch">แก้ไขชุดนำส่ง</button>':''}</div>`:`<div class="empty-step">รายการนี้ยังไม่อยู่ในใบนำส่ง</div>${staffWriteUi()?'<div class="actions left-actions"><button class="btn primary" id="detailCreateBatch">+ สร้างใบนำส่งใหม่</button></div>':''}`}</section>
+      <section class="detail-section plasma-step-section measurement-section"><div class="detail-section-head"><div class="step-title"><span class="step-no">3</span><div><h3>ผล Factor VIII</h3><p>ผลจากพญาไทและหลักฐาน</p></div></div>${factorState}</div>${r.factor_viii_percent!=null?`<div class="detail-section-meta plasma-meta-line"><span class="detail-meta-chip"><b>วันที่ทดสอบ</b> ${esc(r.factor_tested_on||'–')}</span><span class="detail-meta-chip"><b>ผู้กรอกผล</b> ${esc(profileName(r.factor_recorded_by))} · ${esc(dateTH(r.factor_recorded_at))}</span></div>`:''}<div class="detail-grid">${dcell('ผลจากพญาไท',r.factor_viii_percent==null?'–':fmt(r.factor_viii_percent,1)+' %')}${dcell('Factor VIII',r.factor_viii_iu_ml==null?'–':fmt(r.factor_viii_iu_ml,3)+' IU/mL')}${dcell('Factor VIII ต่อถุง',r.factor_viii_iu_bag==null?'–':fmt(r.factor_viii_iu_bag,2)+' IU/bag')}</div><div class="detail-section-evidence"><div class="detail-evidence-title">หลักฐานผล</div>${evHtml}</div></section>
+      <section class="detail-section plasma-step-section"><div class="detail-section-head"><div class="step-title"><span class="step-no">4</span><div><h3>QC และแพทย์ทบทวน</h3><p>สรุปก่อน LOCK</p></div></div>${reviewState}</div><div class="notice ${r.qc_status==='pass'?'good':r.qc_status==='review'?'warning':'info'} compact-review-notice"><strong>ผล QC:</strong> ${esc(plasmaQcTH(r.qc_status))}<span>Volume ≥ ${fmt(state.plasmaSettings.volume_min_ml,0)} mL · Factor VIII ≥ ${fmt(state.plasmaSettings.factor_viii_min_iu_ml,2)} IU/mL</span></div>${r.status==='draft'&&r.returned_at&&r.review_note?`<div class="notice warning"><strong>แพทย์ส่งกลับแก้ไข:</strong> ${esc(r.review_note)}<br>${esc(profileName(r.returned_by))} · ${esc(dateTH(r.returned_at))}</div>`:''}${r.reviewed_at&&r.status==='locked'?`<div class="notice good"><strong>แพทย์ผู้ทบทวน:</strong> ${esc(profileName(r.reviewed_by))} · ${esc(dateTH(r.reviewed_at))}${r.review_note?`<br>${esc(r.review_note)}`:''}</div>`:''}${canReview?`<div class="reviewer-action-panel"><div class="field"><label>หมายเหตุแพทย์</label><textarea id="plasma_review_note" placeholder="ถ้าส่งกลับแก้ไข ต้องระบุเหตุผล"></textarea></div></div>`:''}</section>
+      <section class="detail-section workflow-section"><div class="detail-section-head"><div><h3>ลำดับการบันทึก</h3></div></div><div class="workflow-grid">${workflowStep('สร้างรายการ',r.created_by,r.created_at)}${workflowStep('ส่งให้แพทย์ทบทวน',r.submitted_by,r.submitted_at)}${r.returned_at?workflowStep('แพทย์ส่งกลับแก้ไข',r.returned_by,r.returned_at):workflowStep('แพทย์ทบทวน / LOCK',r.locked_by||r.reviewed_by,r.locked_at||r.reviewed_at)}</div></section>${adminUi()?`<div class="panel"><h3>Audit trail</h3><div class="timeline">${audit?.length?audit.map(a=>auditItem(a)).join(''):'<div class="muted">ยังไม่มีประวัติ</div>'}</div></div>`:''}<div class="actions">${r.qc_status==='review'?ncActionButton('plasma',r.id):''}<button class="btn" id="plasmaDetailClose">ปิด</button>${canReview?'<button class="btn danger" id="plasmaReturn">ส่งกลับแก้ไข</button><button class="btn good" id="plasmaApprove">อนุมัติและ LOCK</button>':''}${canEdit?'<button class="btn primary" id="plasmaEdit">เปิดแก้ไข</button>':''}${adminUi()&&!r.deleted_at?'<button class="btn danger" id="plasmaDelete">ลบรายการ</button>':''}${adminUi()&&r.deleted_at?'<button class="btn good" id="plasmaRestore">กู้คืนรายการ</button>':''}</div>`;
+      $$('.plasma-detail-ev').forEach(x=>x.onclick=()=>viewPlasmaEvidence(x.dataset.id));bindNcButtons($('#detailBody'));if($('#detailPlasmaPdf'))$('#detailPlasmaPdf').onclick=()=>printPlasmaOutlabBatch(b.id);if($('#detailEditBatch'))$('#detailEditBatch').onclick=()=>{$('#detailDialog').close();openPlasmaBatchBuilder(null,b.id);};if($('#detailCreateBatch'))$('#detailCreateBatch').onclick=()=>{$('#detailDialog').close();openPlasmaBatchBuilder(r.id);};$('#plasmaDetailClose').onclick=()=>$('#detailDialog').close();if($('#plasmaEdit'))$('#plasmaEdit').onclick=()=>{$('#detailDialog').close();state.currentPlasmaRecordId=id;location.hash=ROUTES.plasma.record;};if($('#plasmaReturn'))$('#plasmaReturn').onclick=()=>returnPlasmaForCorrection(id,$('#plasma_review_note').value);if($('#plasmaApprove'))$('#plasmaApprove').onclick=()=>approvePlasmaAndLock(id,$('#plasma_review_note').value);if($('#plasmaDelete'))$('#plasmaDelete').onclick=()=>adminDeletePlasma(id);if($('#plasmaRestore'))$('#plasmaRestore').onclick=()=>adminRestorePlasma(id);$('#detailDialog').showModal();logActivity('view_record','plasma_record',id,{module:'plasma',product_no:r.product_no}).catch(()=>{});
+    }catch(e){showToast(errText(e),'error');}
+  }
+  async function approvePlasmaAndLock(id,note=''){if(!reviewerUi())return;if(!await qcConfirmCentered('ยืนยันว่าตรวจทวนผลและหลักฐานแล้ว และอนุมัติให้ LOCK?',{title:'อนุมัติและ LOCK FFP',acceptText:'อนุมัติและ LOCK'}))return;try{const {error}=await state.sb.from('plasma_records').update({status:'locked',review_note:note.trim()||null}).eq('id',id);if(error)throw error;await reloadPlasmaRecords();$('#detailDialog').close();showToast('ทบทวนและ LOCK แล้ว','good');renderReviewQueue();}catch(e){showToast(errText(e),'error');}}
+  async function returnPlasmaForCorrection(id,note=''){if(!reviewerUi())return;note=note.trim();if(!note){showToast('กรุณาระบุเหตุผลที่ส่งกลับแก้ไข','error');return;}try{const {error}=await state.sb.from('plasma_records').update({status:'draft',review_note:note}).eq('id',id);if(error)throw error;await reloadPlasmaRecords();$('#detailDialog').close();showToast('ส่งกลับให้แก้ไขแล้ว','good');renderReviewQueue();}catch(e){showToast(errText(e),'error');}}
+  async function adminDeletePlasma(id){if(!adminUi())return;const reason=await qcPromptCentered('ระบุเหตุผลที่ลบรายการ', {title:'ลบรายการ FFP',placeholder:'เช่น บันทึกผิด / สร้างซ้ำ',required:true,multiline:true,acceptText:'ยืนยันลบ',acceptClass:'danger'});if(!reason?.trim())return;try{const {error}=await state.sb.from('plasma_records').update({deleted_at:new Date().toISOString(),delete_reason:reason.trim()}).eq('id',id);if(error)throw error;await reloadPlasmaRecords();$('#detailDialog').close();showToast('ลบรายการแล้วและเก็บ Audit ไว้','good');renderPlasmaPage('records');}catch(e){showToast(errText(e),'error');}}
+  async function adminRestorePlasma(id){if(!adminUi())return;const reason=await qcPromptCentered('ระบุเหตุผลที่กู้คืนรายการ', {title:'กู้คืนรายการ FFP',placeholder:'เหตุผลที่กู้คืน',required:true,multiline:true,acceptText:'กู้คืนรายการ'});if(!reason?.trim())return;try{const {error}=await state.sb.from('plasma_records').update({deleted_at:null,deleted_by:null,delete_reason:null,last_admin_edit_reason:reason.trim(),last_admin_edit_id:crypto.randomUUID()}).eq('id',id);if(error)throw error;await reloadPlasmaRecords();$('#detailDialog').close();showToast('กู้คืนรายการแล้ว','good');renderPlasmaPage('records');}catch(e){showToast(errText(e),'error');}}
+  function renderPlasmaGuide(){
+    const s=state.plasmaSettings;
+    $('#view-module').innerHTML=`
+      <div class="page-head"><div><h1>คู่มือ FFP</h1><p class="muted">วิธีทำ FFP QC ตั้งแต่เลือกถุงจนแพทย์ทบทวน</p></div><div class="actions">${staffWriteUi()?'<button class="btn" id="guidePlasmaBatch">+ สร้างใบนำส่ง</button><button class="btn primary" id="guidePlasmaNew">+ บันทึก FFP</button>':''}</div></div>
+      <div class="notice info"><strong>จำง่าย:</strong> 1 Product No. = 1 ถุง QC · 1 เที่ยวส่ง = 1 ใบนำส่ง · ในเที่ยวเดียวรวม FFP ต่างชนิดกันได้</div>
+      <div class="notice warning"><strong>ผล Factor VIII ต้องมีหลักฐาน:</strong> เมื่อกรอกผล ต้องแนบรูปหรือ PDF ของใบรายงานผลก่อนบันทึก</div>
+      <div class="guide-grid ffp-guide-grid">
+        <section class="guide-card"><div class="guide-no">1</div><div><h2>เลือกถุงและสร้างรายการ</h2><p>เมื่อเลือก FFP ที่จะทำ QC ให้เข้า <strong>Plasma → บันทึก FFP</strong> แล้วสร้าง Product No. ไว้ก่อน</p><p>กรอกชนิด FFP, Group, วันที่ผลิต, เครื่องปั่น และเวลาที่เตรียมตามจริง</p></div></section>
+        <section class="guide-card"><div class="guide-no">2</div><div><h2>เลือกหน่วยที่เครื่องแสดง</h2><p>เลือก <strong>g</strong> เมื่อได้ค่าน้ำหนักรวมถุง หรือเลือก <strong>mL</strong> เมื่อเครื่องแสดง Volume สุทธิแล้ว ระบบใช้ Volume เดียวกันสำหรับการคำนวณ Factor VIII</p><div class="guide-rule-row"><span class="guide-rule good">Top&Bottom 27.7 g</span><span class="guide-rule good">NLR-Reveos 28.2 g</span><span class="guide-rule good">LR-Reveos 28.2 g</span><span class="guide-rule warn">Density 1.025</span></div><div class="guide-callout">ระบบคำนวณ Volume ให้อัตโนมัติ</div></div></section>
+        <section class="guide-card"><div class="guide-no">3</div><div><h2>เตรียม Segment</h2><p>ตรวจ Product No. ให้ตรงกับถุง แล้วเตรียม Segment ตามวิธีของหน่วย: <strong>แช่แข็ง → พัน Parafilm → เก็บแช่แข็ง</strong> จนถึงเวลานำส่ง</p></div></section>
+        <section class="guide-card"><div class="guide-no">4</div><div><h2>สร้างใบนำส่ง</h2><p>กด <strong>+ สร้างใบนำส่ง</strong> แล้วเลือกเฉพาะ Product No. ที่จะส่งในเที่ยวเดียวกัน จะรวม Top&Bottom, NLR-Reveos และ LR-Reveos ในใบเดียวก็ได้</p><div class="guide-callout"><strong>ส่งหลายถุง:</strong> เลือกทุกถุงที่ไปในเที่ยวเดียวกัน<br><strong>วันอื่นมีเพิ่ม:</strong> สร้างใบนำส่งใหม่เฉพาะถุงที่ส่งวันนั้น<br><strong>เลือกถุงผิด:</strong> ถ้ายังไม่มีผล Factor VIII ให้กดแก้ไขชุด แล้ว Export PDF ใหม่</div><p>ถ้ามีผล Factor VIII แล้วหรือส่งแพทย์แล้ว จะเปลี่ยนถุงในชุดเดิมไม่ได้</p><p><strong>Admin:</strong> หากเป็นชุดทดสอบหรือสร้างผิด และยังไม่มีผล Factor VIII สามารถกด “ยกเลิก” พร้อมระบุเหตุผล ระบบจะเก็บ Audit และคืน Product No. ไปรอจัดชุดใหม่</p></div></section>
+        <section class="guide-card"><div class="guide-no">5</div><div><h2>เช็กใบนำส่งก่อนพิมพ์</h2><p>ตรวจ Product No., รหัสบริการ <strong>${esc(s.outlab_service_code||'250089')}</strong>, <strong>${esc(s.outlab_test_name||'Factor VIII assay')}</strong>, ผู้เตรียม, วัน-เวลา และชื่อ RFS ถ้ามี</p><p>ถ้ามีรายการมาก ระบบจะแบ่งหน้า PDF ให้เอง</p></div></section>
+        <section class="guide-card"><div class="guide-no">6</div><div><h2>นำส่งและรอผล</h2><p>นำ Segment แช่แข็งพร้อมใบนำส่งไปตามขั้นตอนของหน่วย แล้วรอผล Factor VIII กลับมา</p><p>ผลส่งกลับที่ <strong>${esc(s.result_email||'transfusionbb_cnmi@mahidol.ac.th')}</strong></p></div></section>
+        <section class="guide-card"><div class="guide-no">7</div><div><h2>กรอกผล Factor VIII</h2><p>เปิด Product No. ให้ตรงกับใบผล กรอก <strong>Factor VIII (%)</strong> และวันที่ทดสอบ แล้วแนบรูปหรือ PDF ของใบผลในหัวข้อเดียวกัน</p><div class="guide-callout"><strong>ห้ามบันทึกผลโดยไม่มีหลักฐาน</strong> และถ้าคนกรอกผลกับคนแนบไฟล์เป็นคนละคน ระบบจะแสดงตามจริง</div></div></section>
+        <section class="guide-card"><div class="guide-no">8</div><div><h2>ดูผล QC</h2><p>ระบบคำนวณค่า Factor VIII และเทียบเกณฑ์ให้</p><div class="guide-rule-row"><span class="guide-rule good">Volume ≥ ${fmt(s.volume_min_ml,0)} mL</span><span class="guide-rule good">Factor VIII ≥ ${fmt(s.factor_viii_min_iu_ml,2)} IU/mL</span></div><p>ถ้าข้อมูลไม่ครบจะขึ้น “ข้อมูลยังไม่ครบ” ถ้าค่าไม่เข้าเกณฑ์จะขึ้น “ต้องตรวจสอบ”</p></div></section>
+        <section class="guide-card"><div class="guide-no">9</div><div><h2>ส่งแพทย์ทบทวน</h2><p>เมื่อข้อมูลและหลักฐานครบ กด <strong>ส่งตรวจทวน</strong> แพทย์จะตรวจข้อมูลและหลักฐาน แล้วเลือก <strong>อนุมัติและ LOCK</strong> หรือ <strong>ส่งกลับแก้ไข</strong> พร้อมเหตุผล</p></div></section>
+        <section class="guide-card"><div class="guide-no">10</div><div><h2>ถ้ากรอกผิด</h2><p>ก่อน LOCK ให้แก้รายการเดิมได้ตามสิทธิ์ ถ้า LOCK แล้ว ให้แจ้ง Admin พร้อมเหตุผลและหลักฐานที่ถูกต้อง</p><div class="guide-callout">ควรเก็บหลักฐานเดิมไว้ และแนบหลักฐานใหม่เพิ่ม เพื่อดูย้อนหลังได้ว่าแก้อะไร</div></div></section>
+      </div>
+      <div class="panel guide-terms"><h2>สถานะที่เจอบ่อย</h2><div class="term-grid"><div><strong>รอจัดชุด</strong><span>ยังไม่ได้ทำใบนำส่ง</span></div><div><strong>รอผล Factor VIII</strong><span>ส่งตรวจแล้ว รอผลกลับ</span></div><div><strong>ร่าง</strong><span>ยังกลับมาเติมหรือแก้ข้อมูลได้</span></div><div><strong>รอแพทย์</strong><span>ส่งให้แพทย์ทบทวนแล้ว</span></div><div><strong>LOCK</strong><span>แพทย์ทบทวนเสร็จแล้ว</span></div></div></div>`;
+    if($('#guidePlasmaNew'))$('#guidePlasmaNew').onclick=()=>{state.currentPlasmaRecordId=null;location.hash=ROUTES.plasma.record;};
+    if($('#guidePlasmaBatch'))$('#guidePlasmaBatch').onclick=openPlasmaBatchBuilder;
+    bindRouteButtons($('#view-module'));
+  }
+
+  function renderPlasmaSettings(){
+    if(!adminUi()){location.hash=ROUTES.plasma.dashboard;return;}const s=state.plasmaSettings;$('#view-module').innerHTML=`<div class="page-head"><div><h1>ตั้งค่า Plasma QC</h1><p class="muted">FFP · Factor VIII</p></div></div><div class="panel"><h2>เกณฑ์ QC FFP</h2><div class="form-grid">${plasmaField('Volume ขั้นต่ำ (mL)','ps_volume_min',s.volume_min_ml,'number',false,false,'0.01')}${plasmaField('Factor VIII ขั้นต่ำ (IU/mL)','ps_factor_min',s.factor_viii_min_iu_ml,'number',false,false,'0.01')}${plasmaField('อายุผลิตภัณฑ์ (วัน)','ps_expiry_days',s.expiry_days,'number')}<div class="field"><label>&nbsp;</label><label class="inline-check"><input id="ps_require_ev" type="checkbox" checked disabled> บังคับหลักฐาน Factor VIII</label></div></div></div><div class="panel"><h2>Outlab</h2><div class="form-grid">${plasmaField('รหัสบริการ','ps_service_code',s.outlab_service_code)}${plasmaField('ชื่อการทดสอบ','ps_test_name',s.outlab_test_name)}${plasmaField('รหัสแบบฟอร์ม','ps_form_code',s.outlab_form_code)}${plasmaField('เวลานำส่งเริ่มต้น','ps_send_time',plasmaTimeInput(s.default_send_time),'time')}<div class="field span2"><label>ข้อความวันบังคับใช้</label><input id="ps_form_effective" value="${esc(s.outlab_form_effective_text||'วันบังคับใช้ 15 มกราคม 2565')}"></div><div class="field span2"><label>E-mail รับผล</label><input id="ps_result_email" type="email" value="${esc(s.result_email||'transfusionbb_cnmi@mahidol.ac.th')}"></div><div class="field span4"><label>ปลายทาง</label><input id="ps_destination" value="${esc(s.outlab_destination)}"></div></div></div><div class="panel"><h2>น้ำหนักถุง / Density</h2><p class="section-note">สำหรับตั้งค่าเมื่อกรอกเป็น g เท่านั้น · หากเครื่องแสดงปริมาตรสุทธิเป็น mL ให้ใช้ค่าที่อ่านได้โดยตรง ไม่หักน้ำหนักถุงหรือแปลงซ้ำ</p><div class="table-wrap"><table class="data-table plasma-product-settings"><thead><tr><th>ชนิด FFP</th><th>น้ำหนักถุงเปล่า (g)</th><th>Density</th><th></th></tr></thead><tbody>${state.plasmaProductSettings.map(x=>`<tr data-type="${esc(x.product_type)}"><td><strong>${esc(x.product_type)}</strong></td><td><input class="pptare" type="number" step="0.01" value="${esc(x.tare_weight_g)}"></td><td><input class="ppdensity" type="number" step="0.001" value="${esc(x.density)}"></td><td><button class="btn small-btn ppsave">บันทึก</button></td></tr>`).join('')}</tbody></table></div></div><div class="actions"><button class="btn primary" id="savePlasmaSettings">บันทึกเกณฑ์/Outlab</button></div>`;$('#savePlasmaSettings').onclick=savePlasmaSettings;$$('.ppsave').forEach(b=>b.onclick=()=>savePlasmaProductSetting(b.closest('tr').dataset.type));
+  }
+  async function savePlasmaSettings(){try{const payload={volume_min_ml:num($('#ps_volume_min').value),factor_viii_min_iu_ml:num($('#ps_factor_min').value),expiry_days:Number($('#ps_expiry_days').value),require_factor_evidence:true,outlab_service_code:$('#ps_service_code').value.trim(),outlab_test_name:$('#ps_test_name').value.trim(),outlab_form_code:$('#ps_form_code').value.trim(),outlab_form_effective_text:$('#ps_form_effective').value.trim(),result_email:$('#ps_result_email').value.trim(),outlab_destination:$('#ps_destination').value.trim(),default_send_time:$('#ps_send_time').value};const {error}=await state.sb.from('plasma_qc_settings').update(payload).eq('id',1);if(error)throw error;await loadPlasmaModuleData();showToast('บันทึก Plasma settings แล้ว','good');renderPlasmaSettings();}catch(e){showToast(errText(e),'error');}}
+  async function savePlasmaProductSetting(type){try{const row=$$(`.plasma-product-settings tr`).find(x=>x.dataset.type===type),tare=num($('.pptare',row).value),density=num($('.ppdensity',row).value);if(tare==null||tare<0||density==null||density<=0)throw new Error('ตรวจน้ำหนักถุงและ Density');const {error}=await state.sb.from('plasma_product_settings').update({tare_weight_g:tare,density}).eq('product_type',type);if(error)throw error;await loadPlasmaModuleData();showToast(`บันทึก ${type} แล้ว`,'good');renderPlasmaSettings();}catch(e){showToast(errText(e),'error');}}
+
+  // ===== RBC module v5.3.3 =====
+  function rbcMonthKey(d=new Date()){
+    return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit'}).format(d).replace('/','-');
+  }
+  function rbcMonthStart(ym){ return `${ym}-01`; }
+  const rbcProductSetting = type => state.rbcProductSettings.find(x=>x.product_type===type);
+  const activeRbcProducts = () => state.rbcProductSettings.filter(x=>x.is_active).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)||a.product_type.localeCompare(b.product_type));
+  // Post-Storage is the filtered RBC workflow: month/week/owner follow the actual filtration date.
+  function rbcUsesFilterDate(type){const ps=rbcProductSetting(type);return ps?.source_input_mode==='direct_volume'||/post[-\s]?storage/i.test(String(type||''));}
+  function rbcAgeDays(r){if(!r?.collection_on||!r?.filtered_on)return null;return (Date.parse(r.filtered_on+'T00:00:00Z')-Date.parse(r.collection_on+'T00:00:00Z'))/86400000;}
+  function rbcEligible(r){if(!rbcUsesFilterDate(r?.product_type))return true;const age=rbcAgeDays(r);return Number.isFinite(age)&&age>=0&&age<=7;}
+  function rbcTrackingDate(r){return String(rbcUsesFilterDate(r?.product_type)?(r?.filtered_on||''):(r?.manufactured_on||'')).slice(0,10);}
+  function rbcRecordMatchesMonth(r,ym){return monthKeyFromDateString(rbcTrackingDate(r))===ym;}
+  function rbcMissingFilterDateInMonth(r,ym){return rbcUsesFilterDate(r?.product_type)&&!r?.filtered_on&&String(r?.manufactured_on||'').slice(0,7)===ym;}
+  function rbcTrackingDateText(r){return rbcUsesFilterDate(r?.product_type)?(r?.filtered_on?`กรอง ${r.filtered_on}`:'รอระบุวันที่กรอง'):`ผลิต ${r?.manufactured_on||'–'}`;}
+  const rbcProductOptions = selected => activeRbcProducts().map(x=>`<option value="${esc(x.product_type)}" ${selected===x.product_type?'selected':''}>${esc(x.product_type)}</option>`).join('');
+  const rbcQcTH = s => ({incomplete:'ข้อมูลยังไม่ครบ',pass:'ผ่านเกณฑ์ QC',review:'ต้องตรวจสอบ'})[s]||s||'-';
+  const rbcQcBadge = s => `<span class="badge ${s==='pass'?'pass':s==='review'?'review':'incomplete'}">${esc(rbcQcTH(s))}</span>`;
+  const rbcProductClassTH = c => c==='ldprc'?'LDPRC':'LPRC';
+  function rbcModuleReadyNotice(){
+    return `<div class="page-head"><div><h1>RBC</h1><p class="muted">LPRC / LDPRC QC · รวม Hemoglobin (g/unit)</p></div></div><div class="notice warning"><strong>RBC module ยังไม่พร้อม</strong><br>ให้ Admin Run <code>supabase/upgrade_v5_2_3_to_v5_3_0.sql</code> ใน Supabase Project ของ Blood QC ก่อน</div>`;
+  }
+  async function loadRbcModuleData(){
+    try{
+      const [settingsRes,productsRes,recordsRes]=await Promise.all([
+        state.sb.from('rbc_qc_settings').select('*').eq('id',1).single(),
+        state.sb.from('rbc_product_settings').select('*').order('sort_order').order('product_type'),
+        qcAllRows('rbc_records')
+      ]);
+      const firstError=[settingsRes.error,productsRes.error,recordsRes.error].find(Boolean);
+      if(firstError) throw firstError;
+      state.rbcSettings=settingsRes.data;
+      state.rbcProductSettings=productsRes.data||[];
+      state.rbcRecords=(recordsRes.data||[]).map(qcNormalizeRow).sort((a,b)=>String(b.manufactured_on||'').localeCompare(String(a.manufactured_on||''))||String(b.created_at||'').localeCompare(String(a.created_at||'')));
+      state.rbcMonthlyProduction=[];
+      state.rbcReady=true;
+    }catch(e){
+      console.warn('RBC module not ready',e);
+      state.rbcSettings=null; state.rbcProductSettings=[]; state.rbcRecords=[]; state.rbcMonthlyProduction=[]; state.rbcReady=false;
+    }
+  }
+  async function reloadRbcRecords(){
+    if(!state.rbcReady)return;
+    const {data,error}=await qcAllRows('rbc_records');
+    if(error)throw error; state.rbcRecords=(data||[]).map(qcNormalizeRow).sort((a,b)=>String(b.manufactured_on||'').localeCompare(String(a.manufactured_on||''))||String(b.created_at||'').localeCompare(String(a.created_at||''))); updateNcNavBadge();
+  }
+  function renderRbcPage(page='dashboard'){
+    if(!state.rbcReady){ $('#view-module').innerHTML=rbcModuleReadyNotice(); return; }
+    if(page==='record') return renderRbcRecordForm();
+    if(page==='records') return renderRbcRecordsList();
+    if(page==='guide') return renderRbcGuide();
+    if(page==='settings') return renderRbcSettings();
+    return renderRbcDashboard();
+  }
+  function rbcModuleCard(){
+    if(!state.rbcReady)return `<article class="module-card future-module"><div class="module-card-head"><div><h2>RBC</h2><p>LPRC / LDPRC QC</p></div><span class="module-status planned">รออัปเกรดฐานข้อมูล</span></div></article>`;
+    const ym=rbcMonthKey();
+    const month=state.rbcRecords.filter(r=>!r.deleted_at&&rbcRecordMatchesMonth(r,ym)&&rbcEligible(r));
+    const submitted=state.rbcRecords.filter(r=>!r.deleted_at&&r.status==='submitted').length;
+    return `<article class="module-card active-module"><div class="module-card-head"><div><h2>RBC</h2><p>LPRC / LDPRC QC</p></div><span class="module-status live">ใช้งานจริง</span></div><div class="module-stats"><span><strong>${month.length}</strong> QC เดือนนี้</span><span><strong>${submitted}</strong> รอแพทย์</span></div><div class="module-actions"><button class="btn primary" data-go-route="#/rbc">ภาพรวม</button>${staffWriteUi()?'<button class="btn" data-go-route="#/rbc/new">บันทึก RBC</button>':''}<button class="btn" data-go-route="#/rbc/records">รายการ</button><button class="btn" data-go-route="#/rbc/guide">คู่มือ</button></div></article>`;
+  }
+  const RBC_MONTHLY_TARGET_PER_PRODUCT = 4;
+  function rbcQcDone(ym,type){ return state.rbcRecords.filter(r=>!r.deleted_at&&r.product_type===type&&rbcRecordMatchesMonth(r,ym)&&rbcEligible(r)).length; }
+  function rbcTargetCard(p,ym){
+    const target=RBC_MONTHLY_TARGET_PER_PRODUCT,done=rbcQcDone(ym,p.product_type),remain=Math.max(0,target-done),complete=done>=target;
+    const unresolved=state.rbcRecords.filter(r=>!r.deleted_at&&r.product_type===p.product_type&&rbcMissingFilterDateInMonth(r,ym)).length;
+    const pct=Math.min(100,Math.round((done/target)*100));
+    return `<button type="button" class="rbc-progress-card dashboard-product-card ${complete?'complete':''}" data-product="${esc(p.product_type)}"><div class="rbc-progress-head"><div><strong>${esc(p.product_type)}</strong><small>${esc(rbcProductClassTH(p.product_class))}${rbcUsesFilterDate(p.product_type)?' · นับตามวันที่กรอง':''}</small></div><span class="badge ${complete?'pass':'incomplete'}">${complete?'ครบแล้ว':done+' / '+target}</span></div><div class="rbc-progress-track"><span style="width:${pct}%"></span></div><div class="rbc-progress-foot"><span>ทำ QC แล้ว <b>${done}</b></span><span>${complete?'ครบเป้าหมาย':`เหลือ ${remain}`}</span></div>${unresolved?`<small class="rbc-date-warning">มี ${unresolved} รายการรอระบุวันที่กรอง</small>`:''}</button>`;
+  }
+  function renderRbcDashboard(){
+    const ym=state.rbcDashboardMonth||rbcMonthKey(); state.rbcDashboardMonth=ym;
+    const rec=state.rbcRecords.filter(r=>!r.deleted_at);
+    const month=rec.filter(r=>rbcRecordMatchesMonth(r,ym)&&rbcEligible(r));
+    const submitted=rec.filter(r=>r.status==='submitted').length, locked=month.filter(r=>r.status==='locked').length, review=month.filter(r=>rbcEffectiveQcStatus(r)==='review').length;
+    const products=activeRbcProducts();
+    const completedProducts=products.filter(p=>rbcQcDone(ym,p.product_type)>=RBC_MONTHLY_TARGET_PER_PRODUCT).length;
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>ภาพรวม RBC</h1><p class="muted">LPRC / LDPRC QC</p></div><div class="actions"><button class="btn" data-go-route="#/rbc/guide">คู่มือ RBC</button>${staffWriteUi()?'<button class="btn primary" id="rbcNewBtn">+ บันทึก RBC</button>':''}</div></div>
+      <div class="grid cards">${metric('เดือนนี้',month.length,'รายการ RBC QC')}${metric('ครบ 4 ถุง',completedProducts,`จาก ${products.length} ชนิด`)}${metric('รอแพทย์ทบทวน',submitted,'Submitted')}${metric('QC ต้องตรวจสอบ',review,'ค่าบางรายการไม่เข้าเกณฑ์')}${metric('ทบทวนเสร็จสิ้น',locked,'แพทย์ทบทวนและปิดผลแล้ว')}</div>
+      <div class="panel rbc-month-panel compact"><div class="section-title-row"><div><h2>ความครบถ้วน QC รายเดือน</h2><p class="muted">ติดตาม 4 ถุงต่อชนิด · คลิกการ์ดเพื่อดูรายละเอียด</p></div><div class="rbc-month-select"><label>เดือน</label><input id="rbcDashMonth" type="month" value="${esc(ym)}"></div></div><div class="rbc-progress-grid">${products.map(p=>rbcTargetCard(p,ym)).join('')}</div></div>
+      <div class="panel"><h2>รายการล่าสุด</h2>${rbcRecordsTable(rec.slice(0,12))}</div>`;
+    $('#rbcDashMonth').onchange=e=>{state.rbcDashboardMonth=e.target.value||rbcMonthKey();renderRbcDashboard();};
+    if($('#rbcNewBtn'))$('#rbcNewBtn').onclick=()=>{state.currentRbcRecordId=null;location.hash=ROUTES.rbc.record;};
+    $$('.rbc-progress-card',$('#view-module')).forEach(b=>b.onclick=()=>openRbcProductSummary(b.dataset.product,ym));
+    bindRouteButtons($('#view-module')); bindRbcRecordLinks($('#view-module'));
+  }
+  async function openRbcProductSummary(productType,ym){
+    await loadStaffPlannerOwners(ym);
+    const dlg=ensureDetailDialogShell(),rows=state.rbcRecords.filter(r=>!r.deleted_at&&r.product_type===productType&&(rbcRecordMatchesMonth(r,ym)||rbcMissingFilterDateInMonth(r,ym))).sort((a,b)=>String(rbcTrackingDate(a)||a.manufactured_on||'').localeCompare(String(rbcTrackingDate(b)||b.manufactured_on||''))||String(a.created_at||'').localeCompare(String(b.created_at||'')));
+    const target=RBC_MONTHLY_TARGET_PER_PRODUCT,done=rbcQcDone(ym,productType);
+    $('#detailTitle').textContent=`RBC QC · ${productType}`;
+    $('#detailSubtitle').textContent=`${plateletMonthLabel(ym)} · ทำ QC แล้ว ${done}/${target} ถุง`;
+    const weekDisplay=monthlyQcWeeklyPopupHtml(ym,productType,rows,'rbc');
+    $('#detailSubtitle').textContent=`${plateletMonthLabel(ym)} · ทำ QC แล้ว ${done}/${target} ถุง · ครอบคลุม ${weekDisplay.coveredWeeks}/4 สัปดาห์ · ดำเนินการ ${weekDisplay.workWeeks}/4`;
+    $('#detailBody').innerHTML=`${plannedOwnerSummaryHtml(ym,'rbc',productType)}${weekDisplay.html}<div class="actions platelet-week-popup-footer"><button type="button" class="btn" id="rbcSummaryClose">ปิด</button></div>`;
+    $$('.rbc-summary-open',$('#detailBody')).forEach(b=>b.onclick=()=>{dlg.close();openRbcDetail(b.dataset.id);}); $$('.rbc-no-product',$('#detailBody')).forEach(b=>b.onclick=()=>{dlg.close();openPlateletNoPoolDialog(productType,ym+'-'+String(plateletWeekRange(ym,Number(b.dataset.slot))[0]).padStart(2,'0'));});$$('.weekly-evidence-view',$('#detailBody')).forEach(b=>b.onclick=()=>viewPlateletWeeklyEvidence(b.dataset.eventId));$('#rbcSummaryClose').onclick=()=>dlg.close(); dlg.showModal();
+  }
+  function rbcRecordsTable(rows){
+    if(!rows.length)return '<div class="empty">ยังไม่มีข้อมูล</div>';
+    const table=`<div class="table-wrap"><table class="data-table rbc-records-table"><thead><tr><th>Product No.</th><th>ชนิด RBC</th><th>วันที่ผลิต</th><th>วันที่นับสถิติ</th><th>ก่อน</th><th>หลัง</th><th>Residual WBC</th><th>Hb (g/unit)</th><th>QC</th><th>สถานะ</th><th>ผู้สร้าง</th></tr></thead><tbody>${rows.map(r=>{const ps=rbcProductSetting(r.product_type),res=rbcEffectiveResidual(r,1);return `<tr class="${r.deleted_at?'deleted-row':''}"><td><button class="link-btn rbc-record-link" data-id="${r.id}">${esc(r.product_no)}</button>${r.deleted_at?' <span class="badge deleted">ลบแล้ว</span>':''}</td><td>${esc(r.product_type)}</td><td class="nowrap">${esc(r.manufactured_on||'–')}</td><td class="nowrap">${esc(rbcTrackingDateText(r))}</td><td>${r.source_volume_ml==null?'–':fmt(r.source_volume_ml,2)+' mL'}</td><td>${r.final_volume_ml==null?'–':fmt(r.final_volume_ml,2)+' mL'}</td><td>${res==null?'–':fmt(res,3)+' ×10'+(ps?.product_class==='ldprc'?'⁶':'⁹')}</td><td>${[1,2].map(i=>rbcStoredHb(r,i)).every(v=>v===null)?'<span class="muted">รอ Hb</span>':[1,2].map(i=>rbcStoredHb(r,i)==null?'–':fmt(rbcRoundHb(rbcStoredHb(r,i)),rbcHbDigits())).join(' / ')}</td><td>${rbcRecordDecisionBadge(r)}${rbcEffectiveQcStatus(r)==='review'?`<div class="rbc-table-fail-hint">${esc([1,2].flatMap(i=>rbcMachineFindings(r,i).fail.map(f=>`เครื่อง ${i}: ${f.label}`)).join(' · '))}</div>`:''}</td><td>${statusBadge(r.status)}</td><td>${esc(profileName(r.created_by))}</td></tr>`}).join('')}</tbody></table></div>`;
+    const cards=rows.map(r=>{const ps=rbcProductSetting(r.product_type),res=rbcEffectiveResidual(r,1);return `<article class="mobile-data-card ${r.deleted_at?'deleted-row':''}"><div class="mobile-data-card-head"><button class="link-btn rbc-record-link" data-id="${r.id}">${esc(r.product_no)}</button>${r.deleted_at?'<span class="badge deleted">ลบแล้ว</span>':''}</div><div class="mobile-data-card-body">${mobilePair('ชนิด RBC',esc(r.product_type))}${mobilePair('QC',rbcRecordDecisionBadge(r))}${mobilePair('สถานะ',statusBadge(r.status))}${mobilePair('Residual WBC',res==null?'–':fmt(res,3)+' ×10'+(ps?.product_class==='ldprc'?'⁶':'⁹'))}${mobilePair('Hb g/unit',[1,2].map(i=>rbcStoredHb(r,i)==null?'รอ Hb':fmt(rbcRoundHb(rbcStoredHb(r,i)),rbcHbDigits())).join(' / '))}<details class="mobile-record-more"><summary>ดูข้อมูล RBC เพิ่มเติม</summary><div class="mobile-record-extra">${mobilePair('วันที่ผลิต',esc(r.manufactured_on||'–'))}${mobilePair('วันที่นับสถิติ',esc(rbcTrackingDateText(r)))}${mobilePair('ก่อน',r.source_volume_ml==null?'–':fmt(r.source_volume_ml,2)+' mL')}${mobilePair('หลัง',r.final_volume_ml==null?'–':fmt(r.final_volume_ml,2)+' mL')}${mobilePair('ผู้สร้าง',esc(profileName(r.created_by)))}</div></details></div></article>`;}).join('');
+    return responsiveDataTable(table,cards);
+  }
+  function bindRbcRecordLinks(root=document){ $$('.rbc-record-link',root).forEach(b=>b.onclick=()=>openRbcDetail(b.dataset.id)); }
+  function renderRbcRecordsList(){
+    const products=activeRbcProducts();
+    const del=adminUi()?`<label class="inline-check"><input type="checkbox" id="rbcDeleted" ${state.showDeletedRbc?'checked':''}> แสดงรายการที่ลบแล้ว</label>`:'';
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>รายการ RBC</h1><p class="muted">QC LPRC / LDPRC</p></div><div class="actions"><button class="btn" id="rbcCsv">Export CSV</button><button class="btn" data-go-route="#/rbc/guide">คู่มือ RBC</button>${staffWriteUi()?'<button class="btn primary" id="rbcNewList">+ บันทึก RBC</button>':''}</div></div><div class="panel"><div class="filters rbc-filters"><input id="rbcSearch" placeholder="ค้นหา Product No. / ผลิตภัณฑ์"><select id="rbcProductFilter"><option value="">ทุกผลิตภัณฑ์</option>${products.map(p=>`<option value="${esc(p.product_type)}">${esc(p.product_type)}</option>`).join('')}</select><select id="rbcStatusFilter"><option value="">ทุกสถานะ</option><option value="draft">ร่าง</option><option value="submitted">รอตรวจทวน</option><option value="locked">LOCK</option></select><select id="rbcQcFilter"><option value="">ทุกผล QC</option><option value="incomplete">ข้อมูลยังไม่ครบ</option><option value="pass">ผ่านเกณฑ์ QC</option><option value="review">ต้องตรวจสอบ QC</option></select><button class="btn" id="rbcClearFilter">ล้าง</button></div>${del}<div id="rbcRecordsHost" style="margin-top:12px"></div></div>`;
+    const render=()=>{const q=$('#rbcSearch').value.trim().toLowerCase(),pt=$('#rbcProductFilter').value,st=$('#rbcStatusFilter').value,qc=$('#rbcQcFilter').value;let rows=state.rbcRecords.filter(r=>(state.showDeletedRbc||!r.deleted_at)&&(!q||`${r.product_no} ${r.product_type}`.toLowerCase().includes(q))&&(!pt||r.product_type===pt)&&(!st||r.status===st)&&(!qc||rbcEffectiveQcStatus(r)===qc));$('#rbcRecordsHost').innerHTML=rbcRecordsTable(rows);bindRbcRecordLinks($('#rbcRecordsHost'));};
+    ['rbcSearch','rbcProductFilter','rbcStatusFilter','rbcQcFilter'].forEach(id=>$('#'+id).addEventListener(id==='rbcSearch'?'input':'change',render));
+    $('#rbcClearFilter').onclick=()=>{$('#rbcSearch').value='';$('#rbcProductFilter').value='';$('#rbcStatusFilter').value='';$('#rbcQcFilter').value='';render();};
+    if($('#rbcDeleted'))$('#rbcDeleted').onchange=e=>{state.showDeletedRbc=e.target.checked;render();};
+    $('#rbcCsv').onclick=exportRbcCsv; if($('#rbcNewList'))$('#rbcNewList').onclick=()=>{state.currentRbcRecordId=null;location.hash=ROUTES.rbc.record;};
+    bindRouteButtons($('#view-module'));render();
+  }
+  function exportRbcCsv(){
+    const rows=state.rbcRecords.filter(r=>!r.deleted_at),heads=['Product No.','Product Type','Manufactured On','Filtered On','Statistics Date','Source input unit','Source original value','Final input unit','Final original value','Source Volume mL','Final Volume mL','Pre1 Hct','Pre1 WBC','Pre1 RBC','Pre1 PLT','Pre2 Hct','Pre2 WBC','Pre2 RBC','Pre2 PLT','Post1 Hct','Post1 WBC CBC','Post1 RBC','Post1 PLT','Post2 Hct','Post2 WBC CBC','Post2 RBC','Post2 PLT','Post ADAM WBC /uL','Post ADAM measured at','Run1 WBC Removal %','Run2 WBC Removal %','Post1 Hb g/dL','Post2 Hb g/dL','Post1 Hb g/unit','Post2 Hb g/unit','QC','Status'];
+    const vals=rows.map(r=>[r.product_no,r.product_type,r.manufactured_on,r.filtered_on,rbcTrackingDate(r),(r.source_input_value==null&&r.source_gross_weight_g==null&&r.source_volume_ml!=null?'mL':qcVolumeUnit(r.source_input_unit)),(r.source_input_value==null&&r.source_gross_weight_g==null?r.source_volume_ml:qcVolumeOriginal(r,'source_input_unit','source_input_value','source_gross_weight_g','source_volume_ml').value),qcVolumeUnit(r.final_input_unit),qcVolumeOriginal(r,'final_input_unit','final_input_value','final_gross_weight_g','final_volume_ml').value,r.source_volume_ml,r.final_volume_ml,r.pre1_hct_pct,r.pre1_wbc,r.pre1_rbc,r.pre1_plt,r.pre2_hct_pct,r.pre2_wbc,r.pre2_rbc,r.pre2_plt,r.post1_hct_pct,r.post1_wbc,r.post1_rbc,r.post1_plt,r.post2_hct_pct,r.post2_wbc,r.post2_rbc,r.post2_plt,r.post_adam_wbc,r.post_adam_measured_at,r.run1_wbc_removal_pct,r.run2_wbc_removal_pct,r.post1_hb_g_dl,r.post2_hb_g_dl,rbcStoredHb(r,1),rbcStoredHb(r,2),rbcEffectiveQcStatus(r),r.status]);
+    const csv=[heads,...vals].map(row=>row.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\r\n'); const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`RBC_QC_${rbcMonthKey()}.csv`;a.click();URL.revokeObjectURL(a.href);logActivity('export_csv','report',null,{module:'rbc',rows:rows.length}).catch(()=>{});
+  }
+  function rbcField(label,id,value,type='text',readonly=false,required=false,step=''){
+    return `<div class="field"><label class="${required?'required':''}">${label}</label><input id="${id}" type="${type}" value="${esc(value??'')}" ${readonly?'readonly':''} ${step?`step="${step}"`:''}></div>`;
+  }
+  function rbcRepeatTable(prefix,r,productClass,includeWbc=true){
+    const wbcHead=includeWbc?'<th>WBC (K/µL)</th>':'';
+    return `<div class="table-wrap"><table class="data-table rbc-repeat-table"><thead><tr><th></th><th>Hct (%)</th>${wbcHead}<th>RBC (M/µL)</th><th>PLT (K/µL)</th></tr></thead><tbody>${[1,2].map(i=>`<tr><th>เครื่องที่ ${i}</th><td><input id="rbc_${prefix}${i}_hct" type="number" step="0.01" value="${esc(r?.[`${prefix}${i}_hct_pct`]??'')}"></td>${includeWbc?`<td><input id="rbc_${prefix}${i}_wbc" type="number" step="0.0001" value="${esc(r?.[`${prefix}${i}_wbc`]??'')}"></td>`:''}<td><input id="rbc_${prefix}${i}_rbc" type="number" step="0.0001" value="${esc(r?.[`${prefix}${i}_rbc`]??'')}"></td><td><input id="rbc_${prefix}${i}_plt" type="number" step="0.01" value="${esc(r?.[`${prefix}${i}_plt`]??'')}"></td></tr>`).join('')}</tbody></table></div>`;
+  }
+  function rbcEvidenceBox(category,title,editable,locked){
+    return `<div class="measurement-evidence"><div class="measurement-evidence-head"><div><strong>${title}</strong><small class="evidence-multi-hint">เลือกหลายรูปหรือหลายไฟล์พร้อมกันได้</small></div><span class="section-badge required-evidence">บังคับ</span></div>${editable?`<input class="hidden-file-input" type="file" id="rbc_camera_${category}" accept="image/*" capture="environment"><input class="hidden-file-input" type="file" id="rbc_file_${category}" accept="image/*,application/pdf" multiple><div class="evidence-pick-actions"><button type="button" class="btn primary small-btn rbc-camera-pick" data-cat="${category}">ถ่ายรูป</button><button type="button" class="btn small-btn rbc-file-pick" data-cat="${category}">เลือกรูป / ไฟล์ <span class="multi-file-label">หลายไฟล์ได้</span></button></div>`:''}<div class="evidence-list" id="rbc_list_${category}"></div></div>`;
+  }
+  async function loadRbcEvidence(recordId){
+    state.currentRbcEvidence=[]; if(!recordId)return;
+    const {data,error}=await state.sb.from('rbc_evidence_files').select('*').eq('record_id',recordId).order('created_at'); if(error)throw error; state.currentRbcEvidence=data||[];
+  }
+  function renderRbcEvidenceLists(editable,locked=false){
+    ['pre_cbc','post_cbc','post_adam'].forEach(cat=>{const host=$('#rbc_list_'+cat);if(!host)return;const arr=state.currentRbcEvidence.filter(x=>x.category===cat),canDelete=editable&&!locked;host.innerHTML=arr.length?arr.map(e=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(e.original_name)}</strong><small>ผู้แนบหลักฐาน ${esc(profileName(e.uploaded_by))} · ${esc(dateTH(e.created_at))}</small>${e.change_reason?`<small class="evidence-reason">Admin: ${esc(e.change_reason)}</small>`:''}</span><span class="e-actions"><button class="btn small-btn rbc-ev-view" data-id="${e.id}">ดู</button>${canDelete?`<button class="btn small-btn danger rbc-ev-del" data-id="${e.id}">ลบ</button>`:''}</span></div>`).join(''):'<div class="muted small">ยังไม่มีหลักฐาน</div>';});
+    $$('.rbc-ev-view').forEach(b=>b.onclick=()=>viewRbcEvidence(b.dataset.id)); $$('.rbc-ev-del').forEach(b=>b.onclick=()=>deleteRbcEvidence(b.dataset.id));
+  }
+  // v5.3.53: shared RBC QC decision logic; use the same published precision in SQL.
+  // Rounding applies to Hb mass only; strict residual WBC and inclusive Hct retain their own comparisons.
+  function rbcComputedRound(value,decimals){if(value===null||!Number.isFinite(Number(value)))return null;const factor=10**decimals;return Math.round((Number(value)+Number.EPSILON)*factor)/factor;}
+  function rbcHbDigits(){const n=Number(state.rbcSettings?.hb_round_decimals);return Number.isInteger(n)&&n>=0&&n<=4?n:2;}
+  function rbcRoundHb(value){if(value===null||!Number.isFinite(Number(value)))return null;const digits=rbcHbDigits();const scale=10**digits;return Math.round((Number(value)+Number.EPSILON)*scale)/scale;}
+  function rbcThresholds(ps){
+    const s=state.rbcSettings||{},ld=ps?.product_class==='ldprc';
+    const pick=(v,fallback)=>v===null||v===undefined||v===''?Number(fallback):Number(v);
+    return {hb:pick(ps?.qc_hb_min_g_unit,ld?40:43),wbc:Number(ld?s.ldprc_residual_wbc_max_x10e6:s.lprc_residual_wbc_max_x10e9),hctMin:pick(ps?.qc_hct_min_pct,s.hct_min_pct),hctMax:pick(ps?.qc_hct_max_pct,s.hct_max_pct),volumeMin:ps?.qc_volume_min_ml==null?null:Number(ps.qc_volume_min_ml),volumeMax:ps?.qc_volume_max_ml==null?null:Number(ps.qc_volume_max_ml)};
+  }
+  function rbcAssessMetrics(ps,{residual=null,hct=null,hb=null,volume=null}={}){
+    const t=rbcThresholds(ps),fail=[];const add=(key,label,value,limit,id)=>fail.push({key,label,value,limit,id});
+    if(residual!==null && !(residual<t.wbc))add('wbc','Residual WBC',residual,`< ${t.wbc}`,null);
+    if(hct!==null && !(hct>=t.hctMin&&hct<=t.hctMax))add('hct','Hct หลัง',hct,`${t.hctMin}–${t.hctMax}%`,null);
+    if(hb!==null && !(rbcRoundHb(hb)>=t.hb))add('hb','Hb (g/unit)',rbcRoundHb(hb),`≥ ${t.hb} g`,null);
+    if(volume!==null && t.volumeMin!==null && volume<t.volumeMin)add('volume','Volume หลัง',volume,`≥ ${t.volumeMin} mL`,null);
+    if(volume!==null && t.volumeMax!==null && volume>t.volumeMax)add('volume','Volume หลัง',volume,`≤ ${t.volumeMax} mL`,null);
+    const complete=residual!==null&&hct!==null&&hb!==null&&volume!==null;
+    return {fail,complete,pass:fail.length>0?false:complete?true:null,threshold:t};
+  }
+  function rbcMachineFindings(r,i){
+    const ps=rbcProductSetting(r?.product_type);if(!ps)return {fail:[],complete:false,pass:null};
+    const result=rbcAssessMetrics(ps,{residual:rbcEffectiveResidual(r,i),hct:num(r?.[`post${i}_hct_pct`]),hb:rbcStoredHb(r,i),volume:num(r?.final_volume_ml)});
+    const all=(fields)=>fields.every(key=>num(r?.[key])!==null);
+    const before=all(['source_volume_ml',`pre${i}_hct_pct`,`pre${i}_wbc`,`pre${i}_rbc`,`pre${i}_plt`]);
+    const after=all(['final_volume_ml',`post${i}_hct_pct`,`post${i}_hb_g_dl`,`post${i}_rbc`,`post${i}_plt`])&&(ps.product_class==='ldprc'?num(r?.post_adam_wbc)!==null:num(r?.[`post${i}_wbc`])!==null);
+    if(result.pass===true&&!(before&&after))result.pass=null;
+    return result;
+  }
+  function rbcFailureHtml(r){
+    const all=[1,2].flatMap(i=>rbcMachineFindings(r,i).fail.map(f=>`<div><b>เครื่อง ${i} · ${esc(f.label)}</b> ${esc(fmt(f.value,f.key==='hb'?rbcHbDigits():f.key==='hct'?2:3))} <span>เกณฑ์ ${esc(f.limit)}</span></div>`));
+    return all.length?`<div class="rbc-failure-summary"><strong>${r.status==='locked'?'เปรียบเทียบกับเกณฑ์ปัจจุบัน (ไม่เปลี่ยนผลที่แพทย์อนุมัติ)':'จุดที่ต้องตรวจสอบ'}</strong>${all.join('')}</div>`:'';
+  }
+  function rbcPreviewCalc(){
+    const type=$('#rbc_product_type')?.value,ps=rbcProductSetting(type); if(!ps)return null;
+    let sourceVol=null;
+    if(ps.source_input_mode==='direct_volume')sourceVol=num($('#rbc_source_volume_direct')?.value);
+    else sourceVol=qcVolumeInput($('#rbc_source_unit'),$('#rbc_source_gross'),num(ps.source_tare_weight_g),num(ps.source_density)).volume;
+    const finalVol=rbcComputedRound(qcVolumeInput($('#rbc_final_unit'),$('#rbc_final_gross'),num(ps.final_tare_weight_g),num(ps.final_density)).volume,2);
+    const run=i=>{
+      const preW=num($(`#rbc_pre${i}_wbc`)?.value),postW=ps.product_class==='ldprc'?num($('#rbc_post_adam_wbc')?.value):num($(`#rbc_post${i}_wbc`)?.value),postH=num($(`#rbc_post${i}_hct`)?.value),hb=rbcHbUnit($(`#rbc_post${i}_hb`)?.value,finalVol);
+      const preWT=sourceVol!=null&&preW!=null?preW*sourceVol/1000:null;
+      const postWT=finalVol!=null&&postW!=null?rbcComputedRound(postW*finalVol/1000,6):null;
+      const wrem=preWT>0&&postWT!=null?(ps.product_class==='ldprc'?(1-postWT/(preWT*1000))*100:(1-postWT/preWT)*100):null;
+      const assessment=rbcAssessMetrics(ps,{residual:postWT,hct:postH,hb,volume:finalVol});
+      const needed=[`rbc_pre${i}_hct`,`rbc_pre${i}_wbc`,`rbc_pre${i}_rbc`,`rbc_pre${i}_plt`,`rbc_post${i}_hct`,`rbc_post${i}_hb`,`rbc_post${i}_rbc`,`rbc_post${i}_plt`,...(ps.product_class==='ldprc'?['rbc_post_adam_wbc']:[`rbc_post${i}_wbc`])];
+      if(assessment.pass===true&&(!sourceVol||!finalVol||needed.some(id=>num($('#'+id)?.value)===null)))assessment.pass=null;
+      return {...assessment,preWT,postWT,wrem,postH,hb};
+    };
+    return {ps,sourceVol,finalVol,r1:run(1),r2:run(2)};
+  }
+  // LDPRC ADAM results are stored as cells/µL, while the final unit is reported
+  // as ×10^6 cells/unit. Recalculate when the database-derived field is absent.
+  // This also repairs the display of previously saved records without editing evidence.
+  function rbcEffectiveResidual(r,i){
+    const ps=rbcProductSetting(r?.product_type);
+    if(ps?.product_class==='ldprc'){
+      const adam=num(r?.post_adam_wbc),vol=num(r?.final_volume_ml);
+      if(adam!==null&&vol!==null&&vol>0)return rbcComputedRound(adam*vol/1000,6);
+    }
+    return num(r?.[`post${i}_wbc_total`]);
+  }
+  function rbcEffectiveRemoval(r,i){
+    const ps=rbcProductSetting(r?.product_type);
+    if(ps?.product_class==='ldprc'){
+      const pre=num(r?.[`pre${i}_wbc`]),sourceVol=num(r?.source_volume_ml);
+      const adam=num(r?.post_adam_wbc),finalVol=num(r?.final_volume_ml);
+      if(pre!==null&&pre>0&&sourceVol!==null&&sourceVol>0&&adam!==null&&finalVol!==null&&finalVol>0){
+        // CBC pre-WBC: K/µL; ADAM post-WBC: cells/µL.
+        return (1-(adam*finalVol)/(pre*1000*sourceVol))*100;
+      }
+    }
+    return num(r?.[`run${i}_wbc_removal_pct`]);
+  }
+  // Thai Red Cross RBC QC: Hb mass in one unit, not Hb concentration or estimated Hct.
+  // Concentration must be measured on the final product, in g/dL.
+  function rbcHbMin(ps){return rbcThresholds(ps).hb;}
+  function rbcHbUnit(hb,volume){const h=num(hb),v=num(volume);return h===null||v===null||h<0||v<=0?null:h*v/100;}
+  function rbcStoredHb(r,i){return rbcHbUnit(r?.[`post${i}_hb_g_dl`],r?.final_volume_ml);}
+  function rbcHbBadge(value,minimum){return value===null?'<span class="badge incomplete">ยังไม่ได้ตรวจ Hb</span>':value<minimum?'<span class="badge review">Hb ไม่ผ่าน</span>':'<span class="badge pass">Hb ผ่าน</span>';}
+  function rbcStoredMachinePass(r,i){return rbcMachineFindings(r,i).pass;}
+  function rbcRecordAnyMachineFail(r){return [1,2].some(i=>rbcMachineFindings(r,i).pass===false);}
+  function rbcEffectiveQcStatus(r){
+    // A physician-locked decision is a historical decision, not retroactively rewritten when Admin changes criteria.
+    if(r?.status==='locked'&&['pass','review','incomplete'].includes(r?.qc_status))return r.qc_status;
+    const results=[1,2].map(i=>rbcMachineFindings(r,i).pass),required=state.rbcSettings?.require_two_measurements!==false;
+    if(results.some(x=>x===false))return 'review';
+    return results[0]===true&&(!required||results[1]===true)?'pass':'incomplete';
+  }
+  function rbcRecordDecisionBadge(r){return rbcQcBadge(rbcEffectiveQcStatus(r));}
+  function updateRbcFormProduct(){
+    const ps=rbcProductSetting($('#rbc_product_type')?.value); if(!ps)return;
+    const host=$('#rbcSourceInputHost');
+    if(ps.source_input_mode==='direct_volume') host.innerHTML=`${rbcField('Volume LPRC Top&Bottom จาก LIS (mL)','rbc_source_volume_direct',$('#rbc_source_volume_direct')?.value||'', 'number',false,true,'0.01')}<div class="field"><label>ที่มา</label><div class="readonly-box">กรอกจาก Volume ที่แสดงใน LIS</div></div>`;
+    else host.innerHTML=`${qcVolumeChoice('rbc_source_unit','rbc_source_label','rbc_source_gross',null,'source_input_unit','source_input_value','source_gross_weight_g','source_volume_ml',true)}${rbcField('น้ำหนักถุงเปล่า (g)','rbc_source_tare',ps.source_tare_weight_g,'number',true)}${rbcField('Density','rbc_source_density',ps.source_density,'number',true)}${rbcField('Volume ก่อนกระบวนการ (mL)','rbc_source_volume_preview','', 'text',true)}`;
+    $('#rbcSourceTitle').textContent=ps.source_input_mode==='direct_volume'?'ก่อนกรอง · LPRC Top&Bottom':'ก่อนผลิต · '+ps.source_label;
+    $('#rbcFinalTitle').textContent='หลังผลิต/กรอง · '+ps.product_type;
+    $('#rbcFinalTare').value=ps.final_tare_weight_g; $('#rbcFinalDensity').value=ps.final_density;
+    const useFilterDate=rbcUsesFilterDate(ps.product_type);
+    $('#rbcFilteredOnField')?.classList.toggle('hidden',!useFilterDate);
+    $('#rbcCollectionOnField')?.classList.toggle('hidden',!useFilterDate);if($('#rbc_collection_on'))$('#rbc_collection_on').disabled=!useFilterDate||$('#rbc_product_type')?.disabled;
+    if($('#rbc_filtered_on'))$('#rbc_filtered_on').disabled=!useFilterDate || $('#rbc_product_type')?.disabled;
+    const isLdprc=ps.product_class==='ldprc';
+    $$('.rbc-post-cbc-wbc').forEach(el=>el.classList.toggle('hidden',isLdprc));
+    $$('.rbc-post-cbc-wbc input').forEach(el=>{el.disabled=isLdprc;});
+    $('#rbcPostAdamPanel')?.classList.toggle('hidden',!isLdprc);
+    if($('#rbc_post_adam_wbc'))$('#rbc_post_adam_wbc').disabled=!isLdprc;
+    if($('#rbc_post_adam_measured_at'))$('#rbc_post_adam_measured_at').disabled=!isLdprc;
+    if($('#rbcCalcSectionTitle'))$('#rbcCalcSectionTitle').textContent=(isLdprc?'7':'6')+'. ผลคำนวณ QC';
+    if($('#rbcNotesSectionTitle'))$('#rbcNotesSectionTitle').textContent=(isLdprc?'8':'7')+'. หมายเหตุ';
+    $$('#rbcSourceInputHost input').forEach(x=>x.addEventListener('input',updateRbcPreview));
+    $('#rbc_source_unit')?.addEventListener('change',()=>qcVolumeSwitch('rbc_source_unit','rbc_source_gross','rbc_source_label','previousUnit',num(ps.source_tare_weight_g),num(ps.source_density),updateRbcPreview));
+    updateRbcPreview();
+  }
+  function updateRbcPreview(){
+    syncQcVolumeFormFields();
+    const p=rbcPreviewCalc();if(!p)return;
+    if($('#rbc_source_volume_preview'))$('#rbc_source_volume_preview').value=p.sourceVol==null?'':p.sourceVol.toFixed(2);
+    if($('#rbcFinalVolume'))$('#rbcFinalVolume').value=p.finalVol==null?'':p.finalVol.toFixed(2);
+    const unit=p.ps.product_class==='ldprc'?'×10⁶ cells/unit':'×10⁹ cells/unit';
+    [1,2].forEach(i=>{
+      const x=p['r'+i],bad=key=>x.fail.some(f=>f.key===key),mark=(key,value)=>`<span class="${bad(key)?'rbc-qc-fail':''}">${value}</span>`;
+      if($('#rbcCalc'+i))$('#rbcCalc'+i).innerHTML=`<td><strong>เครื่องที่ ${i}</strong></td><td>${mark('wbc',x.postWT==null?'–':fmt(x.postWT,3))} <small>${unit}</small></td><td>${x.wrem==null?'–':fmt(x.wrem,2)+'%'}</td><td>${mark('hct',x.postH==null?'–':fmt(x.postH,2)+'%')}</td><td>${mark('hb',x.hb==null?'<span class="muted">รอ Hb/Volume</span>':fmt(rbcRoundHb(x.hb),rbcHbDigits())+' g')} <small>≥ ${rbcHbMin(p.ps)} g</small></td><td>${x.pass==null?'<span class="muted">–</span>':x.pass?'<span class="badge pass">ผ่าน</span>':'<span class="badge review">ไม่ผ่าน</span>'}</td>`;
+      [['hct',`rbc_post${i}_hct`],['hb',`rbc_post${i}_hb`],['wbc',p.ps.product_class==='ldprc'?'rbc_post_adam_wbc':`rbc_post${i}_wbc`]].forEach(([key,id])=>{
+        const field=$('#'+id);if(!field)return;
+        const failing=bad(key)||(key==='wbc'&&[1,2].some(j=>p['r'+j].fail.some(f=>f.key==='wbc'))&&p.ps.product_class==='ldprc');
+        field.classList.toggle('rbc-qc-input-fail',failing);
+        if(failing)field.title=x.fail.filter(f=>f.key===key).map(f=>`${f.label} เกณฑ์ ${f.limit}`).join(' / ')||'Residual WBC ไม่ผ่าน';else field.removeAttribute('title');
+      });
+    });
+    const volumeBad=[p.r1,p.r2].some(x=>x.fail.some(f=>f.key==='volume'));
+    $('#rbc_final_gross')?.classList.toggle('rbc-qc-input-fail',volumeBad);
+    if($('#rbcQcDecision'))$('#rbcQcDecision').innerHTML=rbcQcDecisionHtml(p);
+  }
+  async function renderRbcRecordForm(){
+    if(!state.currentRbcRecordId&&!staffWriteUi()){location.hash=ROUTES.review;return;}
+    const r=state.currentRbcRecordId?state.rbcRecords.find(x=>x.id===state.currentRbcRecordId):null;
+    if(state.currentRbcRecordId&&!r){showToast('ไม่พบรายการ RBC','error');location.hash=ROUTES.rbc.records;return;}
+    await loadRbcEvidence(r?.id);
+    const type=r?.product_type||activeRbcProducts()[0]?.product_type||'',ps=rbcProductSetting(type),locked=r?.status==='locked',deleted=!!r?.deleted_at;
+    const editable=!deleted && ((r?.status||'draft')==='draft'&&staffWriteUi() || (locked&&adminUi()));
+    const correction=!!r&&adminUi()&&!deleted;
+    const sourceDirect=ps?.source_input_mode==='direct_volume';
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>${r?'แก้ไข':'บันทึก'} RBC QC</h1><p class="muted">LPRC / LDPRC</p></div><div class="actions"><button class="btn" data-go-route="#/rbc/guide">คู่มือ RBC</button>${r?statusBadge(r.status):''}</div></div>
+      ${r?.review_note&&r.status==='draft'?`<div class="notice warning"><strong>แพทย์ส่งกลับแก้ไข:</strong> ${esc(r.review_note)}</div>`:''}
+      <div class="panel"><div class="section-title-row"><h2>1. ข้อมูลรายการ</h2><span class="section-badge">QC</span></div><div id="rbcPlannerOwnerHint" class="planner-owner-hint"><span>ผู้รับผิดชอบตาม Staff Planner</span><strong>${sourceDirect?'ระบุวันที่กรองเพื่อจัดสัปดาห์/ผู้รับผิดชอบ':'ใช้วันที่ผลิตเพื่อจัดสัปดาห์/ผู้รับผิดชอบ'}</strong><small>Post-Storage → BB-Report · ชนิดอื่น → BB-Manual 3</small></div><div class="form-grid">${rbcField('Product No.','rbc_product_no',r?.product_no||'', 'text',!editable,true)}<div class="field"><label class="required">ชนิด RBC</label><select id="rbc_product_type" ${!editable?'disabled':''}><option value="">เลือก</option>${rbcProductOptions(type)}</select></div>${rbcField('วันที่ผลิต','rbc_manufactured_on',r?.manufactured_on||'', 'date',!editable,true)}<div id="rbcFilteredOnField" class="field ${sourceDirect?'':'hidden'}"><label class="required">วันที่กรอง <small>(ใช้เป็นวันที่นับสถิติ)</small></label><input id="rbc_filtered_on" type="date" value="${esc(r?.filtered_on||'')}" ${!editable||!sourceDirect?'disabled':''}></div><div id="rbcCollectionOnField" class="field ${sourceDirect?'':'hidden'}"><label>วันที่เจาะเก็บ (ใช้คำนวณอายุเลือด)</label><input id="rbc_collection_on" type="date" value="${esc(r?.collection_on||'')}" ${!editable||!sourceDirect?'disabled':''}></div>${rbcField('เครื่องปั่น','rbc_centrifuge',r?.centrifuge_no||'', 'text',!editable)}<div class="field span2"><label>ผู้สร้างรายการ</label><div class="readonly-box">${esc(profileName(r?.created_by||state.user.id))}</div></div></div></div>
+      <div class="panel"><h2 id="rbcSourceTitle">2. ก่อนกระบวนการ</h2><div id="rbcSourceInputHost" class="form-grid">${sourceDirect?`${rbcField('Volume LPRC Top&Bottom จาก LIS (mL)','rbc_source_volume_direct',r?.source_volume_ml||'', 'number',!editable,true,'0.01')}<div class="field"><label>ที่มา</label><div class="readonly-box">กรอกจาก Volume ที่แสดงใน LIS</div></div>`:`${qcVolumeChoice('rbc_source_unit','rbc_source_label','rbc_source_gross',r,'source_input_unit','source_input_value','source_gross_weight_g','source_volume_ml',editable)}${rbcField('น้ำหนักถุงเปล่า (g)','rbc_source_tare',ps?.source_tare_weight_g||'', 'number',true)}${rbcField('Density','rbc_source_density',ps?.source_density||'', 'number',true)}${rbcField('Volume ก่อนกระบวนการ (mL)','rbc_source_volume_preview',r?.source_volume_ml||'', 'text',true)}`}</div>${r?.source_recorded_by?`<div class="entry-attribution">ผู้กรอก ${esc(profileName(r.source_recorded_by))} · ${esc(dateTH(r.source_recorded_at))}</div>`:''}</div>
+      <div class="panel measurement-entry-panel"><div class="section-title-row"><h2>3. CBC ก่อนกระบวนการ</h2><span class="section-badge">ก่อน</span></div><div class="form-grid">${rbcField('วัน-เวลาที่ตรวจ','rbc_pre_measured_at',inputFromISO(r?.pre_measured_at),'datetime-local',!editable,true)}<div class="field"><label>เครื่อง CBC</label><select id="rbc_pre_instrument" ${!editable?'disabled':''}><option ${(!r?.pre_cbc_instrument||r.pre_cbc_instrument==='Mindray')?'selected':''}>Mindray</option><option ${r?.pre_cbc_instrument==='Sysmex'?'selected':''}>Sysmex</option></select></div></div>${rbcRepeatTable('pre',r,ps?.product_class)}${r?.pre_recorded_by?`<div class="entry-attribution">ผู้กรอกผล ${esc(profileName(r.pre_recorded_by))} · ${esc(dateTH(r.pre_recorded_at))}</div>`:''}${rbcEvidenceBox('pre_cbc','หลักฐาน CBC ก่อนกระบวนการ',editable,locked)}</div>
+      <div class="panel"><h2 id="rbcFinalTitle">4. หลังผลิต/กรอง</h2><div class="form-grid">${qcVolumeChoice('rbc_final_unit','rbc_final_label','rbc_final_gross',r,'final_input_unit','final_input_value','final_gross_weight_g','final_volume_ml',editable)}${rbcField('น้ำหนักถุงเปล่า (g)','rbcFinalTare',ps?.final_tare_weight_g||'', 'number',true)}${rbcField('Density','rbcFinalDensity',ps?.final_density||'', 'number',true)}${rbcField('Volume หลังผลิต/กรอง (mL)','rbcFinalVolume',r?.final_volume_ml||'', 'text',true)}</div>${r?.final_weight_recorded_by?`<div class="entry-attribution">ผู้กรอกน้ำหนัก ${esc(profileName(r.final_weight_recorded_by))} · ${esc(dateTH(r.final_weight_recorded_at))}</div>`:''}</div>
+      <div class="panel measurement-entry-panel"><div class="section-title-row"><h2>5. CBC หลังผลิต/กรอง</h2><span class="section-badge">หลัง</span></div><div class="form-grid">${rbcField('วัน-เวลาที่ตรวจ CBC','rbc_post_measured_at',inputFromISO(r?.post_measured_at),'datetime-local',!editable,true)}<div class="field"><label>เครื่อง CBC</label><select id="rbc_post_instrument" ${!editable?'disabled':''}><option ${(!r?.post_cbc_instrument||r.post_cbc_instrument==='Mindray')?'selected':''}>Mindray</option><option ${r?.post_cbc_instrument==='Sysmex'?'selected':''}>Sysmex</option></select></div></div><div class="table-wrap"><table class="data-table rbc-repeat-table"><thead><tr><th></th><th>Hct (%)</th><th>Hb (g/dL)</th><th class="rbc-post-cbc-wbc ${ps?.product_class==='ldprc'?'hidden':''}">WBC (K/µL)</th><th>RBC (M/µL)</th><th>PLT (K/µL)</th></tr></thead><tbody>${[1,2].map(i=>`<tr><th>เครื่องที่ ${i}</th><td><input id="rbc_post${i}_hct" type="number" step="0.01" value="${esc(r?.[`post${i}_hct_pct`]??'')}" ${!editable?'disabled':''}></td><td><input id="rbc_post${i}_hb" type="number" min="0" max="35" step="0.01" value="${esc(r?.[`post${i}_hb_g_dl`]??'')}" ${!editable?'disabled':''}></td><td class="rbc-post-cbc-wbc ${ps?.product_class==='ldprc'?'hidden':''}"><input id="rbc_post${i}_wbc" type="number" step="0.0001" value="${esc(r?.[`post${i}_wbc`]??'')}" ${!editable||ps?.product_class==='ldprc'?'disabled':''}></td><td><input id="rbc_post${i}_rbc" type="number" step="0.0001" value="${esc(r?.[`post${i}_rbc`]??'')}" ${!editable?'disabled':''}></td><td><input id="rbc_post${i}_plt" type="number" step="0.01" value="${esc(r?.[`post${i}_plt`]??'')}" ${!editable?'disabled':''}></td></tr>`).join('')}</tbody></table></div>${r?.post_recorded_by?`<div class="entry-attribution">ผู้กรอกผล CBC ${esc(profileName(r.post_recorded_by))} · ${esc(dateTH(r.post_recorded_at))}</div>`:''}${rbcEvidenceBox('post_cbc','หลักฐาน CBC หลังผลิต/กรอง',editable,locked)}</div>
+      <div id="rbcPostAdamPanel" class="panel measurement-entry-panel ${ps?.product_class==='ldprc'?'':'hidden'}"><div class="section-title-row"><h2>6. WBC หลังผลิต/กรองจาก ADAM</h2><span class="section-badge">LDPRC</span></div><div class="form-grid">${rbcField('WBC (/µL)','rbc_post_adam_wbc',r?.post_adam_wbc??'', 'number',!editable,true,'0.0001')}${rbcField('วัน-เวลาที่วัด ADAM','rbc_post_adam_measured_at',inputFromISO(r?.post_adam_measured_at),'datetime-local',!editable,true)}</div>${r?.post_adam_recorded_by?`<div class="entry-attribution">ผู้กรอกผล ADAM ${esc(profileName(r.post_adam_recorded_by))} · ${esc(dateTH(r.post_adam_recorded_at))}</div>`:''}${rbcEvidenceBox('post_adam','หลักฐาน ADAM / WBC หลังผลิต/กรอง',editable,locked)}</div>
+      <div class="panel"><div class="section-title-row"><h2 id="rbcCalcSectionTitle">${ps?.product_class==='ldprc'?'7':'6'}. ผลคำนวณ QC</h2>${r?rbcRecordDecisionBadge(r):''}</div><div class="table-wrap"><table class="data-table rbc-calc-table"><thead><tr><th></th><th>Residual WBC</th><th>WBC Removal</th><th>Hct หลัง</th><th>Hb (g/unit)</th><th>ผล</th></tr></thead><tbody><tr id="rbcCalc1"></tr><tr id="rbcCalc2"></tr></tbody></table></div><div id="rbcQcDecision" style="margin-top:12px"></div></div>
+      <div class="panel"><h2 id="rbcNotesSectionTitle">${ps?.product_class==='ldprc'?'8':'7'}. หมายเหตุ</h2><textarea id="rbc_notes" ${!editable?'disabled':''} placeholder="บันทึกเหตุการณ์หรือข้อมูลเพิ่มเติม">${esc(r?.notes||'')}</textarea></div>
+      ${correction?`<div class="panel admin-correction-panel"><h2>การแก้ไขโดย Admin</h2><div class="field"><label>เหตุผลการแก้ไข</label><textarea id="rbc_admin_reason" placeholder="เช่น เจ้าหน้าที่แจ้งผลผิด ตรวจหลักฐานใหม่แล้วแก้ไข"></textarea></div></div>`:''}
+      <div class="sticky-actions"><div><button class="btn" id="rbcBack">กลับรายการทั้งหมด</button></div><div class="right ${!r?'new-record-actions':''}">${!r&&editable?'<button class="btn clear-form-btn" id="rbcClear">ล้างฟอร์ม</button>':''}${locked&&adminUi()?'<button class="btn" id="rbcUnlock">ปลด LOCK</button>':''}${editable?'<button class="btn primary" id="rbcSave">บันทึกข้อมูล</button>':''}${r&&r.status==='draft'&&staffWriteUi()?'<div class="review-submit-group"><small>ขั้นตอนสุดท้าย · ส่งเมื่อข้อมูลครบแล้ว</small><button class="btn review-submit-btn" id="rbcSubmit">ส่งให้แพทย์ทบทวน</button></div>':''}</div></div>`;
+    // Disable pre repeat fields that helper rendered without disabled attribute.
+    if(!editable) $$('[id^="rbc_pre"]',$('#view-module')).forEach(x=>{if(x.tagName==='INPUT'||x.tagName==='SELECT')x.disabled=true;});
+    const refreshRbcOwner=()=>{const type=$('#rbc_product_type')?.value||'',date=rbcUsesFilterDate(type)?$('#rbc_filtered_on')?.value:$('#rbc_manufactured_on')?.value;refreshPlannerOwnerHint('rbcPlannerOwnerHint',date,'rbc',type);};
+    $('#rbc_product_type').onchange=()=>{updateRbcFormProduct();refreshRbcOwner();};
+    $('#rbc_manufactured_on')?.addEventListener('change',refreshRbcOwner);
+    $('#rbc_filtered_on')?.addEventListener('change',refreshRbcOwner);
+    $$('input,select',$('#view-module')).forEach(x=>x.addEventListener('input',updateRbcPreview));
+    refreshRbcOwner();
+    $('#rbc_final_gross')?.addEventListener('input',updateRbcPreview);
+    $('#rbc_source_unit')?.addEventListener('change',()=>{const cfg=rbcProductSetting($('#rbc_product_type')?.value);qcVolumeSwitch('rbc_source_unit','rbc_source_gross','rbc_source_label','previousUnit',num(cfg?.source_tare_weight_g),num(cfg?.source_density),updateRbcPreview);});
+    $('#rbc_final_unit')?.addEventListener('change',()=>{const cfg=rbcProductSetting($('#rbc_product_type')?.value);qcVolumeSwitch('rbc_final_unit','rbc_final_gross','rbc_final_label','previousUnit',num(cfg?.final_tare_weight_g),num(cfg?.final_density),updateRbcPreview);});
+    $$('.rbc-camera-pick').forEach(b=>b.onclick=()=>$('#rbc_camera_'+b.dataset.cat).click()); $$('.rbc-file-pick').forEach(b=>b.onclick=()=>$('#rbc_file_'+b.dataset.cat).click());
+    ['pre_cbc','post_cbc','post_adam'].forEach(cat=>{$('#rbc_camera_'+cat)?.addEventListener('change',()=>uploadRbcEvidence(cat,'rbc_camera_'+cat));$('#rbc_file_'+cat)?.addEventListener('change',()=>uploadRbcEvidence(cat,'rbc_file_'+cat));});
+    renderRbcEvidenceLists(editable,locked); updateRbcPreview();
+    $('#rbcBack').onclick=()=>location.hash=ROUTES.rbc.records; if($('#rbcClear'))$('#rbcClear').onclick=async()=>{if(await qcConfirmCentered('ล้างฟอร์มทั้งหมด?',{title:'ล้างฟอร์ม RBC',acceptText:'ล้างข้อมูล'})){state.currentRbcRecordId=null;renderRbcRecordForm();}}; if($('#rbcSave'))$('#rbcSave').onclick=()=>saveRbcRecord(false); if($('#rbcSubmit'))$('#rbcSubmit').onclick=submitRbcRecord; if($('#rbcUnlock'))$('#rbcUnlock').onclick=unlockRbcRecord;
+    bindRouteButtons($('#view-module'));if(!r)backlogApplyNewContext('rbc',$('#view-module'));
+  }
+  function collectRbcRecord(){
+    const type=$('#rbc_product_type').value,ps=rbcProductSetting(type),adminReason=$('#rbc_admin_reason')?.value.trim()||null;
+    const payload={product_no:$('#rbc_product_no').value.trim(),product_type:type,manufactured_on:$('#rbc_manufactured_on').value||null,collection_on:rbcUsesFilterDate(type)?($('#rbc_collection_on')?.value||null):null,filtered_on:rbcUsesFilterDate(type)?($('#rbc_filtered_on')?.value||null):null,centrifuge_no:$('#rbc_centrifuge').value.trim()||null,source_gross_weight_g:ps?.source_input_mode==='weight'?qcVolumeInput($('#rbc_source_unit'),$('#rbc_source_gross'),num(ps?.source_tare_weight_g),num(ps?.source_density)).gross:null,source_volume_ml:ps?.source_input_mode==='direct_volume'?num($('#rbc_source_volume_direct')?.value):null,source_input_unit:ps?.source_input_mode==='direct_volume'?'mL':qcVolumeUnit($('#rbc_source_unit')?.value),source_input_value:ps?.source_input_mode==='direct_volume'?num($('#rbc_source_volume_direct')?.value):num($('#rbc_source_gross')?.value),final_gross_weight_g:qcVolumeInput($('#rbc_final_unit'),$('#rbc_final_gross'),num(ps?.final_tare_weight_g),num(ps?.final_density)).gross,final_input_unit:qcVolumeUnit($('#rbc_final_unit')?.value),final_input_value:num($('#rbc_final_gross')?.value),pre_cbc_instrument:$('#rbc_pre_instrument').value||null,pre_measured_at:bangkokISO($('#rbc_pre_measured_at').value),post_cbc_instrument:$('#rbc_post_instrument').value||null,post_measured_at:bangkokISO($('#rbc_post_measured_at').value),post_adam_wbc:ps?.product_class==='ldprc'?num($('#rbc_post_adam_wbc')?.value):null,post_adam_measured_at:ps?.product_class==='ldprc'?bangkokISO($('#rbc_post_adam_measured_at')?.value):null,notes:$('#rbc_notes').value.trim()||null};
+    [1,2].forEach(i=>{['hct','wbc','rbc','plt'].forEach(k=>payload[`pre${i}_${k==='hct'?'hct_pct':k}`]=num($(`#rbc_pre${i}_${k}`).value));['hct','rbc','plt'].forEach(k=>payload[`post${i}_${k==='hct'?'hct_pct':k}`]=num($(`#rbc_post${i}_${k}`).value));payload[`post${i}_hb_g_dl`]=num($(`#rbc_post${i}_hb`).value);payload[`post${i}_wbc`]=ps?.product_class==='ldprc'?null:num($(`#rbc_post${i}_wbc`)?.value);});
+    if(adminUi()&&state.currentRbcRecordId&&adminReason){payload.last_admin_edit_reason=adminReason;payload.last_admin_edit_id=crypto.randomUUID();}
+    return payload;
+  }
+  function rbcHasEvidence(cat){return state.currentRbcEvidence.some(e=>e.category===cat);}
+  function rbcPayloadHasPreResult(p){return [1,2].some(i=>['hct_pct','wbc','rbc','plt'].some(k=>p[`pre${i}_${k}`]!==null));}
+  function rbcPayloadHasPostCbcResult(p,ps){return [1,2].some(i=>['hct_pct','hb_g_dl','rbc','plt'].some(k=>p[`post${i}_${k}`]!==null)||(ps?.product_class!=='ldprc'&&p[`post${i}_wbc`]!==null));}
+  function rbcMachineCompleteness(payload,ps,prefix,i){
+    const keys=prefix==='pre'?['hct_pct','wbc','rbc','plt']:(ps?.product_class==='ldprc'?['hct_pct','hb_g_dl','rbc','plt']:['hct_pct','hb_g_dl','wbc','rbc','plt']);
+    const vals=keys.map(k=>payload[`${prefix}${i}_${k}`]);const filled=vals.filter(v=>v!==null).length;const missing=keys.filter((k,j)=>vals[j]===null);return {keys,filled,total:keys.length,missing,any:filled>0,complete:filled===keys.length};
+  }
+  function validateRbcGroupedInputs(payload,ps){
+    for(const prefix of ['pre','post']){for(const i of [1,2]){const c=rbcMachineCompleteness(payload,ps,prefix,i);if(c.any&&!c.complete)return `${prefix==='pre'?'CBC ก่อนกระบวนการ':'CBC หลังผลิต/กรอง'} เครื่องที่ ${i}: ยังขาด ${c.missing.map(k=>({'hct_pct':'Hct','hb_g_dl':'Hb','wbc':'WBC','rbc':'RBC Count','plt':'Platelet Count'}[k]||k)).join(', ')} (กรอกครบทุกช่องในเครื่องที่เริ่มกรอก)`;}}
+    if(rbcPayloadHasPreResult(payload)&&!payload.pre_measured_at)return 'CBC ก่อนกระบวนการ: กรุณาระบุวัน-เวลาที่ตรวจให้ครบก่อนบันทึก';
+    if(rbcPayloadHasPostCbcResult(payload,ps)&&!payload.post_measured_at)return 'CBC หลังผลิต/กรอง: กรุณาระบุวัน-เวลาที่ตรวจให้ครบก่อนบันทึก';
+    const adamAny=payload.post_adam_wbc!==null||payload.post_adam_measured_at!==null;if(ps?.product_class==='ldprc'&&adamAny&&(payload.post_adam_wbc===null||payload.post_adam_measured_at===null))return 'ADAM หลังผลิต/กรอง: เมื่อกรอกแล้ว ต้องกรอกค่า WBC และวัน-เวลาที่วัดให้ครบก่อนบันทึก';
+    return '';
+  }
+  function rbcClearFieldErrors(){ $$('.qc-field-missing').forEach(el=>{el.classList.remove('qc-field-missing');el.removeAttribute('aria-invalid');}); $$('.qc-missing-inline').forEach(el=>el.remove()); }
+  function rbcMarkMissing(ids){
+    const found=[];
+    ids.forEach(id=>{const el=$('#'+id);if(!el)return;el.classList.add('qc-field-missing');el.setAttribute('aria-invalid','true');found.push(el);});
+    if(found.length){const first=found[0];first.scrollIntoView({behavior:'smooth',block:'center'});setTimeout(()=>first.focus({preventScroll:true}),250);}
+    return found.length;
+  }
+  function rbcShowMissingFields(message,ids=[]){
+    rbcClearFieldErrors();
+    const host=$('#rbcQcDecision');if(host)host.insertAdjacentHTML('afterbegin',`<div class="notice warning rbc-form-validation" role="alert"><strong>ข้อมูลยังไม่ครบ</strong><div>${esc(message)}</div><small>ช่องสีแดงคือข้อมูลที่ต้องตรวจสอบ กดกรอกแล้วจะแสดงผล QC ใหม่ได้</small></div>`);
+    if(!rbcMarkMissing(ids)){
+      const id=message.startsWith('CBC ก่อน')?'rbc_pre_measured_at':message.startsWith('CBC หลัง')?'rbc_post_measured_at':message.startsWith('ADAM')?'rbc_post_adam_wbc':null;
+      if(id)$('#'+id)?.closest('.panel')?.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+  }
+  function rbcRequiredSubmitFields(p,ps){
+    const ids=[];const notes=[];
+    const requireField=(id,value,label)=>{if(value===null||value===undefined||value===''){ids.push(id);notes.push(label);}};
+    requireField('rbc_product_no',p.product_no,'Product No.');requireField('rbc_product_type',p.product_type,'ชนิด RBC');
+    requireField('rbc_manufactured_on',p.manufactured_on,'วันที่ผลิต');
+    if(rbcUsesFilterDate(p.product_type)){requireField('rbc_filtered_on',p.filtered_on,'วันที่กรอง (ใช้เป็นวันที่นับสถิติ)');requireField('rbc_collection_on',p.collection_on,'วันที่เจาะเก็บ');}
+    requireField('rbc_final_gross',p.final_gross_weight_g,'น้ำหนักหลังผลิต');
+    for(const prefix of ['pre','post']){
+      const heading=prefix==='pre'?'CBC ก่อนกระบวนการ':'CBC หลังผลิต';
+      requireField(`rbc_${prefix}_measured_at`,p[`${prefix}_measured_at`],`${heading} วัน-เวลา`);
+      for(const i of (state.rbcSettings?.require_two_measurements===false?[1]:[1,2])){
+        const keys=prefix==='pre'?['hct','wbc','rbc','plt']:['hct','hb',...(ps?.product_class==='ldprc'?[]:['wbc']),'rbc','plt'];
+        keys.forEach(k=>{const col=k==='hct'?'hct_pct':k==='hb'?'hb_g_dl':k;const value=p[`${prefix}${i}_${col}`];requireField(`rbc_${prefix}${i}_${k}`,value,`${heading} เครื่อง ${i}: ${k.toUpperCase()}`);});
+      }
+    }
+    if(ps?.product_class==='ldprc'){
+      requireField('rbc_post_adam_wbc',p.post_adam_wbc,'ผล WBC จาก ADAM');
+      requireField('rbc_post_adam_measured_at',p.post_adam_measured_at,'เวลาตรวจ ADAM');
+    }
+    return {ids,notes};
+  }
+  function qcPopupDialog(options={}){
+    const {title='แจ้งเตือน',message='',mode='alert',acceptText='ตกลง',cancelText='ยกเลิก',acceptClass='primary',defaultValue='',placeholder='',required=false,multiline=false}=options||{};
+    return new Promise(resolve=>{
+      const el=document.createElement('dialog');el.className=`dialog qc-popup-dialog ${mode==='prompt'?'qc-popup-prompt':''}`;
+      const messageHtml=esc(String(message||'')).replace(/\n/g,'<br>');
+      const fieldHtml=mode==='prompt' ? (multiline
+        ? `<textarea class="qc-popup-input" rows="4" placeholder="${esc(placeholder||'')}" ${required?'data-required="1"':''}>${esc(defaultValue||'')}</textarea>`
+        : `<input class="qc-popup-input" type="text" value="${esc(defaultValue||'')}" placeholder="${esc(placeholder||'')}" ${required?'data-required="1"':''}>`
+      ) : '';
+      el.innerHTML=`<div class="qc-popup-body"><div class="qc-popup-head"><h3>${esc(title)}</h3></div><p>${messageHtml}</p>${fieldHtml}<div class="actions"><button type="button" class="btn qc-cancel">${esc(cancelText)}</button><button type="button" class="btn ${acceptClass} qc-accept">${esc(acceptText)}</button></div></div>`;
+      document.body.append(el);
+      const input=el.querySelector('.qc-popup-input');
+      const finish=v=>{try{el.close();}catch(_e){}el.remove();resolve(v)};
+      const accept=()=>{
+        if(mode==='prompt'){
+          const value=(input?.value||'').trim();
+          if(required && !value){input?.classList.add('qc-field-missing');input?.focus();return;}
+          finish(value||null);return;
+        }
+        finish(mode==='confirm'?true:true);
+      };
+      el.querySelector('.qc-cancel').onclick=()=>finish(mode==='confirm'?false:null);
+      el.querySelector('.qc-accept').onclick=accept;
+      if(input){
+        setTimeout(()=>input.focus(),30);
+        input.addEventListener('input',()=>input.classList.remove('qc-field-missing'));
+        input.addEventListener('keydown',e=>{if(e.key==='Enter' && !multiline){e.preventDefault();accept();}});
+      }
+      el.oncancel=e=>{e.preventDefault();finish(mode==='confirm'?false:null)};
+      el.showModal();
+      if(!input) setTimeout(()=>el.querySelector('.qc-accept')?.focus(),30);
+    });
+  }
+  function qcAlertCentered(message,options={}){return qcPopupDialog({...options,message,mode:'alert',cancelText:'',acceptText:options.acceptText||'ตกลง'});}
+  function qcConfirmCentered(message,options={}){return qcPopupDialog({...options,message,mode:'confirm',acceptText:options.acceptText||'ยืนยัน',cancelText:options.cancelText||'ยกเลิก'});}
+  function qcPromptCentered(message,options={}){return qcPopupDialog({...options,message,mode:'prompt',acceptText:options.acceptText||'บันทึก',cancelText:options.cancelText||'ยกเลิก'});}
+  function qcPromptCentered(message){
+    return new Promise(resolve=>{
+      const el=document.createElement('dialog');el.className='dialog qc-confirm-dialog qc-prompt-dialog';
+      el.innerHTML=`<form method="dialog" class="qc-confirm-body"><h3>ระบุเหตุผล</h3><label class="qc-prompt-label" for="qcPromptInput">${esc(message).replace(/\n/g,'<br>')}</label><textarea id="qcPromptInput" rows="3" autocomplete="off" required placeholder="กรุณาระบุเหตุผล"></textarea><div class="qc-prompt-error" role="alert" hidden>กรุณาระบุเหตุผลก่อนยืนยัน</div><div class="actions"><button type="button" class="btn qc-cancel">ยกเลิก</button><button type="submit" class="btn primary qc-accept">ยืนยัน</button></div></form>`;
+      document.body.append(el);
+      let settled=false;
+      const finish=value=>{if(settled)return;settled=true;if(el.open)el.close();el.remove();resolve(value);};
+      el.querySelector('.qc-cancel').onclick=()=>finish(null);
+      el.querySelector('form').onsubmit=e=>{e.preventDefault();const value=el.querySelector('textarea').value.trim();if(!value){el.querySelector('.qc-prompt-error').hidden=false;el.querySelector('textarea').focus();return;}finish(value);};
+      el.oncancel=e=>{e.preventDefault();finish(null);};
+      el.showModal();el.querySelector('textarea').focus();
+    });
+  }
+  function rbcQcDecisionHtml(p){
+    if(!p)return '';
+    const findings=[1,2].flatMap(i=>p['r'+i].fail.map(f=>`<div><strong>เครื่องที่ ${i} · ${esc(f.label)}</strong> ${fmt(f.value,f.key==='hb'?rbcHbDigits():3)} · เกณฑ์ ${esc(f.limit)}</div>`));
+    return findings.length?`<div class="rbc-failure-summary"><strong>ตรวจสอบค่าที่เป็นสีแดง</strong>${findings.join('')}</div>`:'';
+  }
+  function stripRbcResults(p){const x={...p,pre_measured_at:null,post_measured_at:null,post_adam_wbc:null,post_adam_measured_at:null};[1,2].forEach(i=>{['hct_pct','wbc','rbc','plt'].forEach(k=>x[`pre${i}_${k}`]=null);['hct_pct','hb_g_dl','wbc','rbc','plt'].forEach(k=>x[`post${i}_${k}`]=null);});return x;}
+  async function saveRbcRecord(silent=false,autoEvidence=false){
+    if(!qcDateGuard())return false;
+    try{
+      let payload=collectRbcRecord();if((payload.source_input_value!==null&&payload.source_gross_weight_g===null&&payload.source_volume_ml===null)||(payload.final_input_value!==null&&payload.final_gross_weight_g===null)){showToast('กรุณาตรวจสอบค่า g/mL และ Density ก่อนบันทึก RBC','error');return false;} if(!payload.product_no||!payload.product_type){showToast('กรุณากรอก Product No. และชนิด RBC','error');return false;}
+      if(rbcUsesFilterDate(payload.product_type)&&payload.filtered_on&&payload.manufactured_on&&payload.filtered_on<payload.manufactured_on){rbcShowMissingFields('วันที่กรองต้องไม่ก่อนวันที่ผลิต',['rbc_filtered_on']);showToast('กรุณาตรวจสอบวันที่กรอง','error');return false;}
+      if(rbcUsesFilterDate(payload.product_type)&&rbcAgeDays(payload)<0){showToast('วันที่กรองต้องไม่ก่อนวันที่เจาะเก็บ','error');return false;}
+      let id=state.currentRbcRecordId;const ps=rbcProductSetting(payload.product_type);if(autoEvidence&&!id)payload=stripRbcResults(payload);if(!autoEvidence){const groupedError=validateRbcGroupedInputs(payload,ps);if(groupedError){$$('.rbc-form-validation').forEach(x=>x.remove());const ids=[];const match=groupedError.match(/เครื่องที่ (\d)/);const prefix=groupedError.startsWith('CBC ก่อน')?'pre':groupedError.startsWith('CBC หลัง')?'post':null;if(match&&prefix){const names={'Hct':'hct','Hb':'hb','WBC':'wbc','RBC Count':'rbc','Platelet Count':'plt'};Object.entries(names).forEach(([label,key])=>{if(groupedError.includes(label))ids.push(`rbc_${prefix}${match[1]}_${key}`);});}rbcShowMissingFields(groupedError,ids);showToast(groupedError,'error');return false;}if(rbcPayloadHasPreResult(payload)&&!rbcHasEvidence('pre_cbc')){showToast('ผล CBC ก่อนกระบวนการต้องมีหลักฐานก่อนบันทึก','error');return false;}if(rbcPayloadHasPostCbcResult(payload,ps)&&!rbcHasEvidence('post_cbc')){showToast('ผล CBC หลังผลิต/กรองต้องมีหลักฐานก่อนบันทึก','error');return false;}if(ps?.product_class==='ldprc'&&payload.post_adam_wbc!==null&&!rbcHasEvidence('post_adam')){showToast('ผล WBC จาก ADAM ต้องมีหลักฐานก่อนบันทึก','error');return false;}}
+      if(id&&adminUi()&&!payload.last_admin_edit_reason){showToast('Admin กรุณาระบุเหตุผลการแก้ไข','error');$('#rbc_admin_reason')?.focus();return false;}
+      if(id){const {error}=await state.sb.from('rbc_records').update(payload).eq('id',id);if(error)throw error;}else{const {data,error}=await state.sb.from('rbc_records').insert({...payload,created_by:state.user.id}).select('id').single();if(error)throw error;id=data.id;state.currentRbcRecordId=id;}
+      await reloadRbcRecords(); if(!silent)showToast('บันทึก RBC QC แล้ว','good'); if(!silent&&!autoEvidence)await renderRbcRecordForm(); return true;
+    }catch(e){showToast(errText(e),'error');return false;}
+  }
+  async function submitRbcRecord(){
+    if(!state.currentRbcRecordId)return;
+    const ok=await saveRbcRecord(true);if(!ok)return;
+    const latest=state.rbcRecords.find(r=>r.id===state.currentRbcRecordId);
+    if(latest&&rbcRecordAnyMachineFail(latest)&&!ncByRecord('rbc',latest.id)){
+      showToast('มีอย่างน้อย 1 เครื่องไม่ผ่าน ต้องเปิด Corrective Action ก่อนส่งแพทย์ทบทวน','error');
+      await createNonconformance('rbc',latest.id);return;
+    }
+    const required=rbcRequiredSubmitFields(collectRbcRecord(),rbcProductSetting(latest?.product_type));
+    if(required.ids.length){rbcShowMissingFields(`ต้องตรวจสอบ ${required.notes.length} ช่อง: ${required.notes.slice(0,5).join(', ')}${required.notes.length>5?' และอื่น ๆ':''}`,required.ids);return;}
+    const evid=['pre_cbc','post_cbc',...(rbcProductSetting(latest?.product_type)?.product_class==='ldprc'?['post_adam']:[])].filter(x=>!rbcHasEvidence(x));
+    if(evid.length){rbcShowMissingFields('ยังขาดหลักฐาน '+evid.join(', ')+' กรุณาแนบก่อนส่งแพทย์');return;}
+    if(!await qcConfirmCentered('ยืนยันส่งให้แพทย์ทบทวน?\n\nหลังส่ง เจ้าหน้าที่จะกลับมาแก้ไขเองไม่ได้จนกว่าแพทย์จะส่งกลับแก้ไข',{title:'ส่งให้แพทย์ทบทวน RBC',acceptText:'ยืนยันส่ง'}))return;
+    try{const {error}=await state.sb.from('rbc_records').update({status:'submitted'}).eq('id',state.currentRbcRecordId);if(error)throw new Error('ฐานข้อมูลไม่อนุญาตให้ส่งแพทย์: '+errText(error)+' — หากทุกช่องครบแล้ว ให้ Admin ตรวจ trigger/constraint ของ rbc_records (เกณฑ์เดิมอาจไม่ตรงกับ LDPRC)');await reloadRbcRecords();showToast('ส่งแพทย์ทบทวนแล้ว','good');location.hash=ROUTES.rbc.records;}catch(e){showToast(errText(e),'error');}
+  }
+  async function unlockRbcRecord(){
+    const reason=await qcPromptCentered('ระบุเหตุผลที่ต้องปลดล็อก', {title:'ปลดล็อกรายการ RBC',placeholder:'เหตุผลที่ต้องปลดล็อก',required:true,multiline:true,acceptText:'ปลดล็อก'});if(!reason?.trim())return;
+    try{const {error}=await state.sb.from('rbc_records').update({status:'draft',last_unlock_reason:reason.trim()}).eq('id',state.currentRbcRecordId);if(error)throw error;await reloadRbcRecords();showToast('ปลดล็อกแล้ว','good');await renderRbcRecordForm();}catch(e){showToast(errText(e),'error');}
+  }
+  async function uploadRbcEvidence(cat,inputId){
+    try{const input=$('#'+inputId),files=Array.from(input?.files||[]);if(!files.length)return;const tooBig=files.find(f=>f.size>10*1024*1024);if(tooBig)throw new Error(`${tooBig.name}: ไฟล์ต้องไม่เกิน 10 MB`);const existed=!!state.currentRbcRecordId;if(!state.currentRbcRecordId){const ok=await saveRbcRecord(true,true);if(!ok)return;}const rid=state.currentRbcRecordId;let reason=null;if(adminUi()&&existed){reason=$('#rbc_admin_reason')?.value.trim()||null;if(!reason)throw new Error('Admin กรุณาระบุเหตุผลการแก้ไขก่อนแนบหลักฐานใหม่');}let uploaded=0;for(let i=0;i<files.length;i++){const file=files[i],pf=await optimizeEvidenceFile(file),clean=pf.uploadName,path=`rbc/${rid}/${cat}/${Date.now()}_${i}_${clean}`;const {error:u}=await state.sb.storage.from('bloodqc-evidence').upload(path,pf.body,{upsert:false,contentType:pf.mime||undefined});if(u)throw u;const {data,error}=await state.sb.from('rbc_evidence_files').insert({record_id:rid,category:cat,storage_path:path,original_name:file.name,mime_type:pf.mime,file_size:pf.body.size,uploaded_by:state.user.id,change_reason:reason}).select('*').single();if(error){await state.sb.storage.from('bloodqc-evidence').remove([path]);throw error;}state.currentRbcEvidence.push(data);uploaded++;}input.value='';renderRbcEvidenceLists(true,false);showToast(uploaded>1?`แนบหลักฐานแล้ว ${uploaded} ไฟล์`:'แนบหลักฐานแล้ว','good');}catch(e){showToast(errText(e),'error');}
+  }
+
+  async function viewRbcEvidence(id){const e=state.currentRbcEvidence.find(x=>x.id===id);if(!e)return;const {data,error}=await state.sb.storage.from('bloodqc-evidence').createSignedUrl(e.storage_path,120);if(error)showToast(errText(error),'error');else window.open(data.signedUrl,'_blank','noopener');}
+  async function deleteRbcEvidence(id){const e=state.currentRbcEvidence.find(x=>x.id===id);if(!e)return;if(!await qcConfirmCentered(`ลบหลักฐาน ${e.original_name} ?`,{title:'ลบหลักฐาน',acceptText:'ลบ',acceptClass:'danger'}))return;try{const {error}=await state.sb.from('rbc_evidence_files').delete().eq('id',id);if(error)throw error;const {error:s}=await state.sb.storage.from('bloodqc-evidence').remove([e.storage_path]);if(s)console.warn('storage cleanup failed',s);state.currentRbcEvidence=state.currentRbcEvidence.filter(x=>x.id!==id);renderRbcEvidenceLists(true,false);showToast('ลบหลักฐานแล้ว');}catch(e2){showToast(errText(e2),'error');}}
+  function rbcDetailEvidence(cat){const rows=state.currentRbcEvidence.filter(e=>e.category===cat);return rows.length?`<div class="detail-section-evidence"><div class="detail-evidence-title">หลักฐาน</div>${rows.map(e=>`<div class="evidence-item"><span class="name evidence-name"><strong>${esc(e.original_name)}</strong><small>ผู้แนบหลักฐาน ${esc(profileName(e.uploaded_by))} · ${esc(dateTH(e.created_at))}</small>${e.change_reason?`<small class="evidence-reason">Admin: ${esc(e.change_reason)}</small>`:''}</span><button class="btn small-btn rbc-detail-ev" data-id="${e.id}">ดู</button></div>`).join('')}</div>`:'<div class="measurement-evidence-empty">ยังไม่มีหลักฐาน</div>';}
+  function rbcCalcDetail(r,ps,i){
+    const f=rbcMachineFindings(r,i),bad=key=>f.fail.some(x=>x.key===key),mark=(key,value)=>`<span class="${bad(key)?'rbc-qc-fail':''}">${value}</span>`;
+    const residual=rbcEffectiveResidual(r,i),unit=ps.product_class==='ldprc'?'×10⁶ cells/unit':'×10⁹ cells/unit',hb=rbcStoredHb(r,i);
+    return `<tr><th>เครื่องที่ ${i}</th><td>${mark('wbc',residual==null?'–':fmt(residual,3)+' '+unit)}</td><td>${rbcEffectiveRemoval(r,i)==null?'–':fmt(rbcEffectiveRemoval(r,i),2)+'%'}</td><td>${mark('hct',r[`post${i}_hct_pct`]==null?'–':fmt(r[`post${i}_hct_pct`],2)+'%')}</td><td>${mark('hb',hb==null?'ยังไม่ตรวจ':fmt(rbcRoundHb(hb),rbcHbDigits())+' g')} (≥ ${rbcHbMin(ps)})</td></tr>`;
+  }
+  async function openRbcDetail(id){
+    const r=state.rbcRecords.find(x=>x.id===id);if(!r)return;state.currentRbcRecordId=id;await loadRbcEvidence(id);const ps=rbcProductSetting(r.product_type),direct=ps?.source_input_mode==='direct_volume';
+    const sourceMeta=r.source_recorded_by?`<span class="detail-meta-chip"><b>ผู้กรอก${direct?' Volume':'น้ำหนัก'}</b> ${esc(profileName(r.source_recorded_by))}</span><span class="detail-meta-chip"><b>บันทึก</b> ${esc(dateTH(r.source_recorded_at))}</span>`:'';
+    const preMeta=r.pre_recorded_by?`<span class="detail-meta-chip"><b>ผู้กรอกผล</b> ${esc(profileName(r.pre_recorded_by))}</span><span class="detail-meta-chip"><b>บันทึกล่าสุด</b> ${esc(dateTH(r.pre_recorded_at))}</span>`:'';
+    const postMeta=r.post_recorded_by?`<span class="detail-meta-chip"><b>ผู้กรอกผล</b> ${esc(profileName(r.post_recorded_by))}</span><span class="detail-meta-chip"><b>บันทึกล่าสุด</b> ${esc(dateTH(r.post_recorded_at))}</span>`:'';
+    const finalMeta=r.final_weight_recorded_by?`<span class="detail-meta-chip"><b>ผู้กรอกค่า g/mL</b> ${esc(profileName(r.final_weight_recorded_by))}</span><span class="detail-meta-chip"><b>บันทึก</b> ${esc(dateTH(r.final_weight_recorded_at))}</span>`:'';
+    $('#detailDialog').innerHTML=`<div class="dialog-head"><div><h2>${esc(r.product_no)}</h2><p>${esc(r.product_type)} · Revision ${r.revision}</p></div><button class="icon-btn" id="rbcDetailClose">×</button></div><div class="detail-scroll">
+      <div class="status-line">${rbcRecordDecisionBadge(r)} ${statusBadge(r.status)} ${r.deleted_at?'<span class="badge deleted">ลบแล้ว</span>':''}</div>
+      <section class="detail-section"><div class="detail-section-head"><div><h3>ข้อมูลรายการ</h3><p>RBC QC</p></div><div class="detail-section-meta"><span class="detail-meta-chip"><b>ผู้สร้าง</b> ${esc(profileName(r.created_by))}</span><span class="detail-meta-chip"><b>สร้าง</b> ${esc(dateTH(r.created_at))}</span></div></div><div class="detail-grid"><div><span>ชนิด RBC</span><strong>${esc(r.product_type)}</strong></div><div><span>วันที่ผลิต</span><strong>${esc(r.manufactured_on||'–')}</strong></div>${rbcUsesFilterDate(r.product_type)?`<div><span>วันที่กรอง · ใช้นับสถิติ</span><strong>${esc(r.filtered_on||'ยังไม่ระบุ')}</strong></div>`:''}<div><span>เครื่องปั่น</span><strong>${esc(r.centrifuge_no||'–')}</strong></div></div></section>
+      <section class="detail-section"><div class="detail-section-head"><div><h3>${direct?'ก่อนกรอง':'ก่อนผลิต'} · ${esc(ps?.source_label||'')}</h3></div><div class="detail-section-meta">${sourceMeta}</div></div><div class="detail-grid">${direct?`<div><span>Volume จาก LIS</span><strong>${r.source_volume_ml==null?'–':fmt(r.source_volume_ml,2)+' mL'}</strong></div>`:`<div><span>ค่าที่เจ้าหน้าที่กรอก</span><strong>${fmt(qcVolumeOriginal(r,'source_input_unit','source_input_value','source_gross_weight_g','source_volume_ml').value,2)} ${qcVolumeUnit(r.source_input_unit)}</strong></div><div><span>น้ำหนักถุงเปล่า</span><strong>${fmt(r.source_tare_weight_g,2)} g</strong></div><div><span>Density</span><strong>${fmt(r.source_density,3)}</strong></div><div><span>Volume</span><strong>${r.source_volume_ml==null?'–':fmt(r.source_volume_ml,2)+' mL'}</strong></div>`}</div></section>
+      <section class="detail-section measurement-section"><div class="detail-section-head"><div><h3>CBC ก่อนกระบวนการ</h3><p>${r.pre_measured_at?'วันที่ตรวจ '+dateTH(r.pre_measured_at):'ยังไม่มีผล'}</p></div><div class="detail-section-meta">${preMeta}</div></div><div class="table-wrap"><table class="data-table rbc-repeat-table"><thead><tr><th></th><th>Hct</th><th>WBC K/µL</th><th>RBC M/µL</th><th>PLT K/µL</th></tr></thead><tbody>${[1,2].map(i=>`<tr><th>เครื่องที่ ${i}</th><td>${fmt(r[`pre${i}_hct_pct`],2)}</td><td>${fmt(r[`pre${i}_wbc`],4)}</td><td>${fmt(r[`pre${i}_rbc`],4)}</td><td>${fmt(r[`pre${i}_plt`],2)}</td></tr>`).join('')}</tbody></table></div>${rbcDetailEvidence('pre_cbc')}</section>
+      <section class="detail-section"><div class="detail-section-head"><div><h3>หลังผลิต/กรอง · ${esc(r.product_type)}</h3></div><div class="detail-section-meta">${finalMeta}</div></div><div class="detail-grid"><div><span>ค่าที่เจ้าหน้าที่กรอก</span><strong>${fmt(qcVolumeOriginal(r,'final_input_unit','final_input_value','final_gross_weight_g','final_volume_ml').value,2)} ${qcVolumeUnit(r.final_input_unit)}</strong></div><div><span>น้ำหนักถุงเปล่า</span><strong>${fmt(r.final_tare_weight_g,2)} g</strong></div><div><span>Density</span><strong>${fmt(r.final_density,3)}</strong></div><div><span>Volume</span><strong>${r.final_volume_ml==null?'–':fmt(r.final_volume_ml,2)+' mL'}</strong></div></div></section>
+      <section class="detail-section measurement-section"><div class="detail-section-head"><div><h3>CBC หลังผลิต/กรอง</h3><p>${r.post_measured_at?'วันที่ตรวจ '+dateTH(r.post_measured_at):'ยังไม่มีผล'}</p></div><div class="detail-section-meta">${postMeta}</div></div><div class="table-wrap"><table class="data-table rbc-repeat-table"><thead><tr><th></th><th>Hct</th><th>Hb g/dL</th><th>Hb g/unit</th>${ps?.product_class==='ldprc'?'':'<th>WBC K/µL</th>'}<th>RBC M/µL</th><th>PLT K/µL</th></tr></thead><tbody>${[1,2].map(i=>`<tr><th>เครื่องที่ ${i}</th><td class="${rbcMachineFindings(r,i).fail.some(f=>f.key==='hct')?'rbc-qc-fail-cell':''}">${fmt(r[`post${i}_hct_pct`],2)}</td><td class="${rbcMachineFindings(r,i).fail.some(f=>f.key==='hb')?'rbc-qc-fail-cell':''}">${fmt(r[`post${i}_hb_g_dl`],2)}</td><td class="${rbcMachineFindings(r,i).fail.some(f=>f.key==='hb')?'rbc-qc-fail-cell':''}">${rbcStoredHb(r,i)==null?'–':fmt(rbcRoundHb(rbcStoredHb(r,i)),rbcHbDigits())}</td>${ps?.product_class==='ldprc'?'':`<td>${fmt(r[`post${i}_wbc`],4)}</td>`}<td>${fmt(r[`post${i}_rbc`],4)}</td><td>${fmt(r[`post${i}_plt`],2)}</td></tr>`).join('')}</tbody></table></div>${rbcDetailEvidence('post_cbc')}</section>
+      ${ps?.product_class==='ldprc'?`<section class="detail-section measurement-section"><div class="detail-section-head"><div><h3>ADAM / WBC หลังผลิต/กรอง</h3><p>${r.post_adam_measured_at?'วันที่วัด '+dateTH(r.post_adam_measured_at):'ยังไม่มีผล'}</p></div><div class="detail-section-meta">${r.post_adam_recorded_by?`<span class="detail-meta-chip"><strong>ผู้กรอกผล</strong> ${esc(profileName(r.post_adam_recorded_by))}</span><span class="detail-meta-chip"><strong>บันทึกล่าสุด</strong> ${esc(dateTH(r.post_adam_recorded_at))}</span>`:'<span class="detail-meta-chip muted-chip">ยังไม่มีผล</span>'}</div></div><div class="detail-grid">${dcell('WBC ADAM',r.post_adam_wbc==null?'–':fmt(r.post_adam_wbc,2)+' /µL')}${dcell('Residual WBC',rbcEffectiveResidual(r,1)==null?'–':fmt(rbcEffectiveResidual(r,1),3)+' ×10⁶ cells/unit')}</div>${rbcDetailEvidence('post_adam')}</section>`:''}
+      <section class="detail-section"><div class="detail-section-head"><div><h3>ผลคำนวณ QC</h3><p>${ps?.product_class==='ldprc'?'LDPRC':'LPRC'}</p></div><div>${rbcRecordDecisionBadge(r)}</div></div><div class="table-wrap"><table class="data-table"><thead><tr><th></th><th>Residual WBC</th><th>WBC Removal</th><th>Hct หลัง</th><th>Hb (g/unit)</th></tr></thead><tbody>${rbcCalcDetail(r,ps,1)}${rbcCalcDetail(r,ps,2)}</tbody></table></div>${rbcFailureHtml(r)}</section>
+      ${r.notes?`<section class="detail-section"><h3>หมายเหตุ</h3><div class="detail-note">${esc(r.notes)}</div></section>`:''}
+      <section class="detail-section"><h3>ลำดับการบันทึก</h3><div class="workflow-grid"><div class="workflow-step done"><span class="workflow-dot"></span><div><strong>สร้างรายการ</strong><small>${esc(profileName(r.created_by))} · ${esc(dateTH(r.created_at))}</small></div></div><div class="workflow-step ${r.submitted_at?'done':''}"><span class="workflow-dot"></span><div><strong>ส่งตรวจทวน</strong><small>${r.submitted_at?esc(profileName(r.submitted_by))+' · '+esc(dateTH(r.submitted_at)):'–'}</small></div></div><div class="workflow-step ${r.locked_at?'done':''}"><span class="workflow-dot"></span><div><strong>แพทย์ทบทวน / LOCK</strong><small>${r.locked_at?esc(profileName(r.locked_by))+' · '+esc(dateTH(r.locked_at)):'–'}</small></div></div></div></section>
+      ${reviewerUi()&&r.status==='submitted'?`<section class="detail-section reviewer-action-panel"><h3>แพทย์ทบทวน</h3><textarea id="rbc_review_note" placeholder="หมายเหตุ (จำเป็นเมื่อส่งกลับแก้ไข)"></textarea><div class="actions"><button class="btn danger" id="rbcReturn">ส่งกลับแก้ไข</button><button class="btn good" id="rbcApprove">อนุมัติและ LOCK</button></div></section>`:''}
+      <div class="dialog-actions">${(r.status!=='locked'&&rbcEffectiveQcStatus(r)==='review')?ncActionButton('rbc',r.id):''}<button class="btn" id="rbcDetailCloseBottom">ปิด</button>${staffWriteUi()&&!r.deleted_at&&r.status!=='submitted'?`<button class="btn primary" id="rbcEdit">เปิดแก้ไข</button>`:''}${adminUi()?r.deleted_at?'<button class="btn good" id="rbcRestore">กู้คืนรายการ</button>':'<button class="btn danger" id="rbcDelete">ลบรายการ</button>':''}</div></div>`;
+    $$('.rbc-detail-ev').forEach(b=>b.onclick=()=>viewRbcEvidence(b.dataset.id));bindNcButtons($('#detailDialog')); const close=()=>$('#detailDialog').close();$('#rbcDetailClose').onclick=close;$('#rbcDetailCloseBottom').onclick=close;if($('#rbcEdit'))$('#rbcEdit').onclick=()=>{close();state.currentRbcRecordId=id;location.hash=ROUTES.rbc.record;};if($('#rbcReturn'))$('#rbcReturn').onclick=()=>returnRbcForCorrection(id,$('#rbc_review_note').value);if($('#rbcApprove'))$('#rbcApprove').onclick=()=>approveRbcAndLock(id,$('#rbc_review_note').value);if($('#rbcDelete'))$('#rbcDelete').onclick=()=>adminDeleteRbc(id);if($('#rbcRestore'))$('#rbcRestore').onclick=()=>adminRestoreRbc(id);$('#detailDialog').showModal();logActivity('view_record','rbc_record',id,{module:'rbc',product_no:r.product_no}).catch(()=>{});
+  }
+  async function approveRbcAndLock(id,note=''){if(!reviewerUi())return;if(!await qcConfirmCentered('ยืนยันว่าตรวจทวนผลและหลักฐานแล้ว และอนุมัติให้ LOCK?',{title:'อนุมัติและ LOCK RBC',acceptText:'อนุมัติและ LOCK'}))return;try{const {error}=await state.sb.from('rbc_records').update({status:'locked',review_note:note.trim()||null}).eq('id',id);if(error)throw error;await reloadRbcRecords();$('#detailDialog').close();showToast('ทบทวนและ LOCK แล้ว','good');renderReviewQueue();}catch(e){showToast(errText(e),'error');}}
+  async function returnRbcForCorrection(id,note=''){if(!reviewerUi())return;note=note.trim();if(!note){showToast('กรุณาระบุเหตุผลที่ส่งกลับแก้ไข','error');return;}try{const {error}=await state.sb.from('rbc_records').update({status:'draft',review_note:note}).eq('id',id);if(error)throw error;await reloadRbcRecords();$('#detailDialog').close();showToast('ส่งกลับให้แก้ไขแล้ว','good');renderReviewQueue();}catch(e){showToast(errText(e),'error');}}
+  async function adminDeleteRbc(id){if(!adminUi())return;const reason=await qcPromptCentered('ระบุเหตุผลที่ลบรายการ', {title:'ลบรายการ RBC',placeholder:'เหตุผลที่ลบรายการ',required:true,multiline:true,acceptText:'ยืนยันลบ',acceptClass:'danger'});if(!reason?.trim())return;try{const {error}=await state.sb.from('rbc_records').update({deleted_at:new Date().toISOString(),delete_reason:reason.trim()}).eq('id',id);if(error)throw error;await reloadRbcRecords();$('#detailDialog').close();showToast('ลบรายการแล้วและเก็บ Audit ไว้','good');renderRbcPage('records');}catch(e){showToast(errText(e),'error');}}
+  async function adminRestoreRbc(id){if(!adminUi())return;const reason=await qcPromptCentered('ระบุเหตุผลที่กู้คืนรายการ', {title:'กู้คืนรายการ Platelet',placeholder:'เหตุผลที่กู้คืน',required:true,multiline:true,acceptText:'กู้คืนรายการ'});if(!reason?.trim())return;try{const {error}=await state.sb.from('rbc_records').update({deleted_at:null,deleted_by:null,delete_reason:null,last_admin_edit_reason:reason.trim(),last_admin_edit_id:crypto.randomUUID()}).eq('id',id);if(error)throw error;await reloadRbcRecords();$('#detailDialog').close();showToast('กู้คืนรายการแล้ว','good');renderRbcPage('records');}catch(e){showToast(errText(e),'error');}}
+  function renderRbcGuide(){
+    const s=state.rbcSettings;
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>คู่มือ RBC</h1><p class="muted">วิธีบันทึก QC LPRC / LDPRC</p></div><div class="actions">${staffWriteUi()?'<button class="btn primary" id="guideRbcNew">+ บันทึก RBC</button>':''}</div></div>
+      <div class="notice info"><strong>จำง่าย:</strong> RBC ที่บันทึกในหน้านี้เป็น QC ทุกถุง และติดตามแยกชนิดละ <strong>4 ถุงต่อเดือน</strong> หากต้องทำมากกว่า 4 ถุงก็บันทึกเพิ่มได้</div>
+      <div class="notice warning"><strong>ทุกผลต้องมีหลักฐาน:</strong> CBC ก่อน, CBC หลัง และ ADAM ของ LDPRC ต้องแนบรูปหรือ PDF ของผลส่วนนั้นก่อนบันทึก</div>
+      <div class="guide-grid">
+        <section class="guide-card"><div class="guide-no">1</div><div><h2>เช็กว่าครบ 4 ถุงหรือยัง</h2><p>เข้า <strong>RBC → ภาพรวม</strong> เพื่อดูจำนวนของแต่ละชนิด ระบบนับแยก LPRC Top&Bottom, LPRC NLR-Reveos, LDPRC Pre-Storage และ LDPRC Post-Storage</p><div class="guide-callout"><strong>Post-Storage:</strong> เดือน/สัปดาห์และชื่อผู้รับผิดชอบนับจาก <strong>วันที่กรองจริง</strong> ไม่ใช่วันที่ผลิต หากรายการเก่ายังไม่มีวันที่กรอง ระบบจะขึ้น “รอระบุวันที่กรอง” และยังไม่นับเข้าสัปดาห์</div></div></section>
+        <section class="guide-card"><div class="guide-no">2</div><div><h2>เลือกชนิด RBC และสร้างรายการ</h2><p>กรอก Product No., ชนิด RBC, วันที่ผลิต และเครื่องปั่นตามข้อมูลจริง</p></div></section>
+        <section class="guide-card"><div class="guide-no">3</div><div><h2>3 ชนิดแรก: ก่อนกระบวนการ</h2><p>เลือกกรอกน้ำหนักรวมถุงเป็น g หรือ Volume สุทธิเป็น mL จากเครื่องที่แปลงค่าแล้ว ระบบคำนวณ Volume ให้ตรงกัน</p><div class="guide-rule-row"><span class="guide-rule good">WB Top&Bottom 236.8 g</span><span class="guide-rule good">WB NLR 332.1 g</span><span class="guide-rule good">WB LR 353.4 g</span><span class="guide-rule warn">Density WB 1.057</span></div></div></section>
+        <section class="guide-card"><div class="guide-no">4</div><div><h2>Post-Storage Immugard: ก่อนกรอง</h2><p>ไม่ต้องชั่ง LPRC Top&Bottom ใหม่ ให้เปิด LIS แล้วกรอก <strong>Volume (mL)</strong> ของถุงที่สุ่มมาโดยตรง</p></div></section>
+        <section class="guide-card"><div class="guide-no">5</div><div><h2>กรอก CBC ก่อนกระบวนการ</h2><p>กรอกผลเครื่องที่ 1 และเครื่องที่ 2: Hct, WBC, RBC และ PLT พร้อมวัน-เวลาที่ตรวจจริง</p><p><strong>ต้องแนบรูปหรือ PDF ของผล CBC ก่อนจึงบันทึกผลได้</strong></p></div></section>
+        <section class="guide-card"><div class="guide-no">6</div><div><h2>ชั่งหลังผลิต/กรอง</h2><div class="guide-rule-row"><span class="guide-rule good">LPRC T&B 36.2 g</span><span class="guide-rule good">LPRC NLR 39.2 g</span><span class="guide-rule good">LDPRC Pre 45.3 g</span><span class="guide-rule good">LDPRC Post 34.3 g</span></div><p>Density: LPRC = 1.06, LDPRC = 1.09 ระบบคำนวณ Volume หลังให้</p></div></section>
+        <section class="guide-card"><div class="guide-no">7</div><div><h2>กรอกผลหลังผลิต/กรอง</h2><p><strong>LPRC:</strong> กรอก Hct, WBC, RBC และ PLT จาก CBC เครื่องที่ 1 และเครื่องที่ 2</p><p><strong>LDPRC:</strong> กรอก Hct, RBC และ PLT จาก CBC ส่วน WBC หลังกรองให้วัดจาก <strong>ADAM</strong> และกรอกในช่อง ADAM แยก</p><p>ผล CBC หลังและ ADAM ต้องมีหลักฐานของตัวเองก่อนบันทึก</p></div></section>
+        <section class="guide-card"><div class="guide-no">8</div><div><h2>ดูผล QC</h2><p>ระบบคำนวณ Hemoglobin (g/unit) = Hb หลังผลิต (g/dL) × Volume หลังผลิต (mL) ÷ 100 รวมทั้ง Residual WBC และ %WBC Removal เพื่อช่วยติดตาม QC โดยไม่ใช้ RBC Count เป็นเกณฑ์ตัดสิน QC</p><div class="guide-callout"><strong>LPRC:</strong> Residual WBC &lt; ${fmt(s.lprc_residual_wbc_max_x10e9,1)} ×10⁹, Hct ${fmt(s.hct_min_pct,0)}–${fmt(s.hct_max_pct,0)}%<br><strong>LDPRC:</strong> Residual WBC &lt; ${fmt(s.ldprc_residual_wbc_max_x10e6,1)} ×10⁶, Hct ${fmt(s.hct_min_pct,0)}–${fmt(s.hct_max_pct,0)}%</div></div></section>
+        <section class="guide-card"><div class="guide-no">9</div><div><h2>ใครทำส่วนไหน คนนั้นกรอกได้</h2><p>น้ำหนัก, CBC ก่อน, CBC หลัง และ ADAM สามารถทำต่างวันหรือต่างคนได้ หน้ารายละเอียดจะแสดงว่าใครกรอกส่วนไหนและเมื่อไร</p></div></section>
+        <section class="guide-card"><div class="guide-no">10</div><div><h2>ส่งแพทย์ทบทวน</h2><p>เมื่อข้อมูลและหลักฐานครบ กด <strong>ส่งแพทย์ทบทวน</strong> แพทย์จะเลือก <strong>อนุมัติและ LOCK</strong> หรือ <strong>ส่งกลับแก้ไข</strong> พร้อมเหตุผล</p><p>ถ้าต้องแก้หลัง LOCK ให้แจ้ง Admin พร้อมหลักฐานที่ถูกต้อง ระบบจะเก็บประวัติการแก้ไว้ให้ตรวจย้อนหลัง</p></div></section>
+      </div>`;
+    if($('#guideRbcNew'))$('#guideRbcNew').onclick=()=>{state.currentRbcRecordId=null;location.hash=ROUTES.rbc.record;};bindRouteButtons($('#view-module'));
+  }
+
+  function renderRbcSettings(){
+    if(!adminUi()){location.hash=ROUTES.rbc.dashboard;return;}const s=state.rbcSettings;
+    $('#view-module').innerHTML=`<div class="page-head"><div><h1>ตั้งค่า RBC QC</h1><p class="muted">LPRC / LDPRC</p></div></div><div class="panel"><h2>เกณฑ์ QC</h2><div class="form-grid">${rbcField('LPRC Residual WBC สูงสุด (×10⁹)','rs_lprc_wbc',s.lprc_residual_wbc_max_x10e9,'number',false,false,'0.1')}${rbcField('LDPRC Residual WBC สูงสุด (×10⁶)','rs_ldprc_wbc',s.ldprc_residual_wbc_max_x10e6,'number',false,false,'0.1')}${rbcField('Hct ขั้นต่ำ (%)','rs_hct_min',s.hct_min_pct,'number',false,false,'0.1')}${rbcField('Hct สูงสุด (%)','rs_hct_max',s.hct_max_pct,'number',false,false,'0.1')}${rbcField('ปัด Hb (g/unit) ทศนิยม','rs_hb_digits',s.hb_round_decimals??2,'number',false,false,'1')}<div class="field span2"><label>&nbsp;</label><label class="inline-check"><input id="rs_two" type="checkbox" ${s.require_two_measurements?'checked':''}> ต้องมีผลครบ 2 ครั้ง</label><label class="inline-check"><input id="rs_pre_ev" type="checkbox" checked disabled> บังคับหลักฐาน CBC ก่อน</label><label class="inline-check"><input id="rs_post_ev" type="checkbox" checked disabled> บังคับหลักฐาน CBC หลัง</label><label class="inline-check"><input id="rs_post_adam_ev" type="checkbox" checked disabled> บังคับหลักฐาน ADAM หลัง (LDPRC)</label></div></div><div class="actions"><button class="btn primary" id="saveRbcSettings">บันทึกเกณฑ์</button></div></div>
+      <div class="panel"><h2>เกณฑ์แยกตามผลิตภัณฑ์</h2><p class="section-note">ตั้งค่าโดย Admin ตาม SOP ที่อนุมัติ · Hct และ Volume เว้นว่างได้ (Hct ว่าง = ใช้เกณฑ์กลาง, Volume ว่าง = ไม่ตรวจช่วงปริมาตร) · เปลี่ยนเกณฑ์แล้วรายการที่ยังไม่ LOCK จะแสดงผลใหม่โดยไม่แก้ค่าที่ตรวจจริง</p><div class="table-wrap"><table class="data-table rbc-limit-settings"><thead><tr><th>ผลิตภัณฑ์</th><th>Hb ขั้นต่ำ (g/unit)</th><th>Hct ต่ำสุด (%)</th><th>Hct สูงสุด (%)</th><th>Volume ต่ำสุด (mL)</th><th>Volume สูงสุด (mL)</th><th></th></tr></thead><tbody>${state.rbcProductSettings.map(p=>`<tr data-type="${esc(p.product_type)}"><td><strong>${esc(p.product_type)}</strong><small>${esc(rbcProductClassTH(p.product_class))}</small></td><td><input class="rql-hb" type="number" step="0.01" min="0" value="${esc(p.qc_hb_min_g_unit??(p.product_class==='ldprc'?40:43))}"></td><td><input class="rql-hct-min" type="number" step="0.1" min="0" max="100" placeholder="กลาง" value="${esc(p.qc_hct_min_pct??'')}"></td><td><input class="rql-hct-max" type="number" step="0.1" min="0" max="100" placeholder="กลาง" value="${esc(p.qc_hct_max_pct??'')}"></td><td><input class="rql-vol-min" type="number" step="0.01" min="0" placeholder="ไม่บังคับ" value="${esc(p.qc_volume_min_ml??'')}"></td><td><input class="rql-vol-max" type="number" step="0.01" min="0" placeholder="ไม่บังคับ" value="${esc(p.qc_volume_max_ml??'')}"></td><td><button class="btn small-btn rql-save">บันทึกเกณฑ์</button></td></tr>`).join('')}</tbody></table></div></div>
+      <div class="panel"><h2>น้ำหนักถุง / Density</h2><p class="section-note">ตั้งค่าแปลงน้ำหนักรวมถุง (g) เป็นปริมาตร · การกรอกปริมาตรสุทธิ (mL) ใช้ค่าที่เครื่องแสดงโดยตรง</p><div class="table-wrap"><table class="data-table rbc-product-settings"><thead><tr><th>ผลิตภัณฑ์</th><th>ก่อนกระบวนการ</th><th>Tare ก่อน</th><th>Density ก่อน</th><th>Tare หลัง</th><th>Density หลัง</th><th></th></tr></thead><tbody>${state.rbcProductSettings.map(p=>`<tr data-type="${esc(p.product_type)}"><td><strong>${esc(p.product_type)}</strong><small>${esc(rbcProductClassTH(p.product_class))}</small></td><td>${esc(p.source_label)}${p.source_input_mode==='direct_volume'?'<br><span class="badge">Volume จาก LIS</span>':''}</td><td>${p.source_input_mode==='direct_volume'?'–':`<input class="rps-source-tare" type="number" step="0.01" value="${esc(p.source_tare_weight_g)}">`}</td><td>${p.source_input_mode==='direct_volume'?'–':`<input class="rps-source-density" type="number" step="0.001" value="${esc(p.source_density)}">`}</td><td><input class="rps-final-tare" type="number" step="0.01" value="${esc(p.final_tare_weight_g)}"></td><td><input class="rps-final-density" type="number" step="0.001" value="${esc(p.final_density)}"></td><td><button class="btn small-btn rps-save">บันทึก</button></td></tr>`).join('')}</tbody></table></div></div>`;
+    $('#saveRbcSettings').onclick=saveRbcSettings;$$('.rps-save').forEach(b=>b.onclick=()=>saveRbcProductSetting(b.closest('tr')));$$('.rql-save').forEach(b=>b.onclick=()=>saveRbcLimitSetting(b.closest('tr')));
+  }
+  async function saveRbcSettings(){
+    try{const payload={lprc_residual_wbc_max_x10e9:num($('#rs_lprc_wbc').value),ldprc_residual_wbc_max_x10e6:num($('#rs_ldprc_wbc').value),hct_min_pct:num($('#rs_hct_min').value),hct_max_pct:num($('#rs_hct_max').value),require_two_measurements:$('#rs_two').checked,hb_round_decimals:Number($('#rs_hb_digits').value),require_pre_evidence:true,require_post_evidence:true,require_post_adam_evidence:true};if(payload.hct_min_pct>payload.hct_max_pct)throw new Error('Hct ขั้นต่ำต้องไม่มากกว่าค่าสูงสุด');if(!Number.isInteger(payload.hb_round_decimals)||payload.hb_round_decimals<0||payload.hb_round_decimals>4)throw new Error('ทศนิยม Hb ต้องอยู่ระหว่าง 0–4');const {error}=await state.sb.from('rbc_qc_settings').update(payload).eq('id',1);if(error)throw error;await loadRbcModuleData();showToast('บันทึก RBC settings แล้ว','good');renderRbcSettings();}catch(e){showToast(errText(e),'error');}
+  }
+  async function saveRbcLimitSetting(row){
+    if(!adminUi())return;
+    try{
+      const get=cls=>num($(cls,row)?.value),payload={qc_hb_min_g_unit:get('.rql-hb'),qc_hct_min_pct:get('.rql-hct-min'),qc_hct_max_pct:get('.rql-hct-max'),qc_volume_min_ml:get('.rql-vol-min'),qc_volume_max_ml:get('.rql-vol-max')};
+      if(payload.qc_hb_min_g_unit===null||payload.qc_hb_min_g_unit<0)throw new Error('ต้องกรอก Hb ขั้นต่ำที่ถูกต้อง');
+      const s=state.rbcSettings||{},minH=payload.qc_hct_min_pct??Number(s.hct_min_pct),maxH=payload.qc_hct_max_pct??Number(s.hct_max_pct);
+      if(minH<0||maxH>100||minH>maxH)throw new Error('ตรวจช่วง Hct ต่ำสุด/สูงสุด');
+      if([payload.qc_volume_min_ml,payload.qc_volume_max_ml].some(x=>x!==null&&x<0)||(payload.qc_volume_min_ml!==null&&payload.qc_volume_max_ml!==null&&payload.qc_volume_min_ml>payload.qc_volume_max_ml))throw new Error('ตรวจช่วง Volume ต่ำสุด/สูงสุด');
+      if(!await qcConfirmCentered('เปลี่ยนเกณฑ์ QC สำหรับ '+row.dataset.type+'?\nควรใช้เฉพาะเกณฑ์ SOP ที่อนุมัติ',{title:'ยืนยันเกณฑ์ RBC',acceptText:'บันทึกเกณฑ์'}))return;
+      const {error}=await state.sb.from('rbc_product_settings').update(payload).eq('product_type',row.dataset.type);if(error)throw error;
+      await loadRbcModuleData();renderRbcSettings();showToast('บันทึกเกณฑ์ '+row.dataset.type+' แล้ว','good');
+    }catch(e){showToast(errText(e),'error');}
+  }
+  async function saveRbcProductSetting(row){
+    try{const type=row.dataset.type,p=rbcProductSetting(type),payload={final_tare_weight_g:num($('.rps-final-tare',row).value),final_density:num($('.rps-final-density',row).value)};if(p.source_input_mode==='weight'){payload.source_tare_weight_g=num($('.rps-source-tare',row).value);payload.source_density=num($('.rps-source-density',row).value);}if(payload.final_tare_weight_g==null||payload.final_tare_weight_g<0||payload.final_density==null||payload.final_density<=0)throw new Error('ตรวจค่าหลังผลิต/กรอง');if(p.source_input_mode==='weight'&&(payload.source_tare_weight_g==null||payload.source_tare_weight_g<0||payload.source_density==null||payload.source_density<=0))throw new Error('ตรวจค่าก่อนผลิต');const {error}=await state.sb.from('rbc_product_settings').update(payload).eq('product_type',type);if(error)throw error;await loadRbcModuleData();showToast(`บันทึก ${type} แล้ว`,'good');renderRbcSettings();}catch(e){showToast(errText(e),'error');}
+  }
+
+
+  init().catch(e=>{console.error(e);showToast(errText(e),'error');showLogin();});
+})();
